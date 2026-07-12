@@ -1,9 +1,10 @@
 use crate::{
     formats::TiffLoader,
-    preprocess::{MipPipelines, MipPrepass},
+    preprocess::{MipPipelines, MipPrepass, initialize_mip_pipelines},
     render::{
         DepthCopyPipeline, GpuTerrain, GpuTerrainView, TerrainItem, TerrainPass,
         TerrainTilingPrepassPipelines, TilingPrepass, TilingPrepassItem, extract_terrain_phases,
+        initialize_depth_copy_pipeline, initialize_terrain_tiling_prepass_pipelines,
         prepare_terrain_depth_textures, queue_tiling_prepass,
     },
     shaders::{InternalShaders, load_terrain_shaders},
@@ -17,9 +18,9 @@ use bevy::{
     core_pipeline::core_3d::graph::{Core3d, Node3d},
     prelude::*,
     render::{
-        Render, RenderApp, RenderSet,
+        Render, RenderApp, RenderStartup, RenderSystems,
         graph::CameraDriverLabel,
-        render_graph::{RenderGraph, RenderGraphApp, ViewNodeRunner},
+        render_graph::{RenderGraph, RenderGraphExt, ViewNodeRunner},
         render_phase::{DrawFunctions, ViewSortedRenderPhases, sort_phase_system},
         render_resource::*,
     },
@@ -87,7 +88,7 @@ impl Plugin for TerrainPlugin {
                         TileAtlas::update_terrain_buffer,
                     )
                         .chain()
-                        .after(TransformSystem::TransformPropagate),
+                        .after(TransformSystems::Propagate),
                 ),
             );
         app.sub_app_mut(RenderApp)
@@ -119,13 +120,13 @@ impl Plugin for TerrainPlugin {
                         GpuTerrainView::prepare_indirect,
                         GpuTerrainView::prepare_refine_tiles,
                     )
-                        .in_set(RenderSet::Prepare),
-                    sort_phase_system::<TerrainItem>.in_set(RenderSet::PhaseSort),
-                    prepare_terrain_depth_textures.in_set(RenderSet::PrepareResources),
-                    (queue_tiling_prepass, GpuTileAtlas::queue).in_set(RenderSet::Queue),
+                        .in_set(RenderSystems::Prepare),
+                    sort_phase_system::<TerrainItem>.in_set(RenderSystems::PhaseSort),
+                    prepare_terrain_depth_textures.in_set(RenderSystems::PrepareResources),
+                    (queue_tiling_prepass, GpuTileAtlas::queue).in_set(RenderSystems::Queue),
                     GpuTileAtlas::_cleanup
                         .before(World::clear_entities)
-                        .in_set(RenderSet::Cleanup),
+                        .in_set(RenderSystems::Cleanup),
                 ),
             )
             .add_render_graph_node::<ViewNodeRunner<TerrainPass>>(Core3d, TerrainPass)
@@ -153,9 +154,13 @@ impl Plugin for TerrainPlugin {
 
         load_terrain_shaders(app, &attachments);
 
-        app.sub_app_mut(RenderApp)
-            .init_resource::<TerrainTilingPrepassPipelines>()
-            .init_resource::<MipPipelines>()
-            .init_resource::<DepthCopyPipeline>();
+        app.sub_app_mut(RenderApp).add_systems(
+            RenderStartup,
+            (
+                initialize_terrain_tiling_prepass_pipelines,
+                initialize_mip_pipelines,
+                initialize_depth_copy_pipeline,
+            ),
+        );
     }
 }

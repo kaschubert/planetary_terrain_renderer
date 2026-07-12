@@ -1,8 +1,6 @@
 use crate::shaders::DEPTH_COPY_SHADER;
 use bevy::{
-    core_pipeline::{
-        core_3d::CORE_3D_DEPTH_FORMAT, fullscreen_vertex_shader::fullscreen_shader_vertex_state,
-    },
+    core_pipeline::{FullscreenShader, core_3d::CORE_3D_DEPTH_FORMAT},
     ecs::query::QueryItem,
     prelude::*,
     render::{
@@ -191,47 +189,48 @@ pub struct DepthCopyPipeline {
     id: CachedRenderPipelineId,
 }
 
-impl FromWorld for DepthCopyPipeline {
-    fn from_world(world: &mut World) -> Self {
-        let device = world.resource::<RenderDevice>();
-        let pipeline_cache = world.resource::<PipelineCache>();
+pub fn initialize_depth_copy_pipeline(
+    mut commands: Commands,
+    device: Res<RenderDevice>,
+    pipeline_cache: Res<PipelineCache>,
+    fullscreen_shader: Res<FullscreenShader>,
+    asset_server: Res<AssetServer>,
+) {
+    let layout = device.create_bind_group_layout(
+        None,
+        &BindGroupLayoutEntries::sequential(
+            ShaderStages::FRAGMENT,
+            (texture_depth_2d_multisampled(),),
+        ),
+    );
 
-        let layout = device.create_bind_group_layout(
-            None,
-            &BindGroupLayoutEntries::sequential(
-                ShaderStages::FRAGMENT,
-                (texture_depth_2d_multisampled(),),
-            ),
-        );
+    let id = pipeline_cache.queue_render_pipeline(RenderPipelineDescriptor {
+        label: None,
+        layout: vec![layout.clone()],
+        push_constant_ranges: Vec::new(),
+        vertex: fullscreen_shader.to_vertex_state(),
+        fragment: Some(FragmentState {
+            shader: asset_server.load(DEPTH_COPY_SHADER),
+            shader_defs: vec![],
+            entry_point: Some("fragment".into()),
+            targets: vec![],
+        }),
+        primitive: Default::default(),
+        depth_stencil: Some(DepthStencilState {
+            format: CORE_3D_DEPTH_FORMAT,
+            depth_write_enabled: true,
+            depth_compare: CompareFunction::Always,
+            stencil: Default::default(),
+            bias: Default::default(),
+        }),
+        multisample: MultisampleState {
+            count: 4, // Todo: specialize per camera ...
+            ..Default::default()
+        },
+        zero_initialize_workgroup_memory: false,
+    });
 
-        let id = pipeline_cache.queue_render_pipeline(RenderPipelineDescriptor {
-            label: None,
-            layout: vec![layout.clone()],
-            push_constant_ranges: Vec::new(),
-            vertex: fullscreen_shader_vertex_state(),
-            fragment: Some(FragmentState {
-                shader: world.load_asset(DEPTH_COPY_SHADER),
-                shader_defs: vec![],
-                entry_point: "fragment".into(),
-                targets: vec![],
-            }),
-            primitive: Default::default(),
-            depth_stencil: Some(DepthStencilState {
-                format: CORE_3D_DEPTH_FORMAT,
-                depth_write_enabled: true,
-                depth_compare: CompareFunction::Always,
-                stencil: Default::default(),
-                bias: Default::default(),
-            }),
-            multisample: MultisampleState {
-                count: 4, // Todo: specialize per camera ...
-                ..Default::default()
-            },
-            zero_initialize_workgroup_memory: false,
-        });
-
-        Self { layout, id }
-    }
+    commands.insert_resource(DepthCopyPipeline { layout, id });
 }
 
 #[derive(Debug, Hash, Default, PartialEq, Eq, Clone, RenderLabel)]
@@ -253,6 +252,7 @@ impl ViewNode for TerrainPass {
         context: &mut RenderContext<'w>,
         (render_view, main_view, camera, target, depth, terrain_depth): QueryItem<
             'w,
+            '_,
             Self::ViewQuery,
         >,
         world: &'w World,
