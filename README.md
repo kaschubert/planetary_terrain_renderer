@@ -50,6 +50,12 @@ Use the preprocess CLI or a prepared configuration in the `preprocess/examples` 
 Then run the `examples/spherical.rs` demo with the preprocessed dataset selected.
 The default path for the datasets is `source_data`.
 
+## Run exclusively on Vulkan
+
+```sh
+WGPU_BACKEND=vulkan cargo run --example spherical
+```
+
 ## Debug Controls
 
 These are the debug controls of the plugin.
