@@ -6,4 +6,5 @@ assets/**/data/*
 assets/**/config.tc
 assets/terrains/
 source_data
+preprocess/assets
 downloads

@@ -1,10 +1,15 @@
 use bevy_terrain::prelude::*;
 use bevy_terrain_preprocess::prelude::*;
 use gdal::raster::GdalDataType;
+use std::env::set_current_dir;
 
 fn main() {
+    // Run from the workspace root: the terrain must land in the renderer's assets
+    // directory and config.path must stay relative to the workspace root.
+    set_current_dir(concat!(env!("CARGO_MANIFEST_DIR"), "/..")).unwrap();
+
     let args = Cli {
-        src_path: vec!["source_data/gebco_earth.tif".into()],
+        src_path: vec!["preprocess/source_data/gebco_earth.tif".into()],
         terrain_path: "assets/terrains/earth".into(),
         temp_path: None,
         overwrite: true,
@@ -25,7 +30,7 @@ fn main() {
     preprocess(src_dataset, &mut context);
 
     let args = Cli {
-        src_path: vec!["source_data/true_marble.tif".into()],
+        src_path: vec!["preprocess/source_data/true_marble.tif".into()],
         terrain_path: "assets/terrains/earth".into(),
         temp_path: None,
         overwrite: true,
