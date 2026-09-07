@@ -143,6 +143,21 @@ fn initialize(
     //     view,
     // );
     //
+    // LINZ New Zealand dataset: download and preprocess it first, see
+    // preprocess/download_nz.sh and preprocess/examples/preprocess_nz.rs
+    commands.spawn_terrain(
+        asset_server.load("terrains/nz/config.tc.ron"),
+        TerrainViewConfig {
+            order: 1,
+            ..default()
+        },
+        CustomMaterial {
+            gradient: gradient1.clone(),
+            gradient_info: GradientInfo { mode: 2 },
+        },
+        view,
+    );
+
     commands.spawn_terrain(
         asset_server.load("terrains/swiss/config.tc.ron"),
         TerrainViewConfig {
