@@ -9,7 +9,7 @@ fn main() {
     set_current_dir(concat!(env!("CARGO_MANIFEST_DIR"), "/..")).unwrap();
 
     let args = Cli {
-        src_path: vec!["preprocess/source_data/gebco_earth.tif".into()],
+        src_path: vec!["preprocess/source_data/example/gebco_earth.tif".into()],
         terrain_path: "assets/terrains/earth".into(),
         temp_path: None,
         overwrite: true,
@@ -30,7 +30,7 @@ fn main() {
     preprocess(src_dataset, &mut context);
 
     let args = Cli {
-        src_path: vec!["preprocess/source_data/true_marble.tif".into()],
+        src_path: vec!["preprocess/source_data/example/true_marble.tif".into()],
         terrain_path: "assets/terrains/earth".into(),
         temp_path: None,
         overwrite: true,

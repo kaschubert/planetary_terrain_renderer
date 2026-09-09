@@ -9,7 +9,7 @@ fn main() {
     set_current_dir(concat!(env!("CARGO_MANIFEST_DIR"), "/..")).unwrap();
 
     let args = Cli {
-        src_path: vec!["preprocess/source_data/LOS.tiff".into()],
+        src_path: vec!["preprocess/source_data/example/LOS.tiff".into()],
         terrain_path: "assets/terrains/los".into(),
         temp_path: None,
         overwrite: true,
