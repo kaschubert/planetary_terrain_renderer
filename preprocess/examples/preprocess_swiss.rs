@@ -14,6 +14,7 @@ fn main() {
         temp_path: None,
         overwrite: true,
         resume: false,
+        disk_budget: None,
         no_data: PreprocessNoData::NoData(10000.0),
         data_type: PreprocessDataType::DataType(GdalDataType::Float32),
         fill_radius: 32.0,

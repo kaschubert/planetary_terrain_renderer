@@ -25,6 +25,9 @@ pub struct Cli {
     /// Reuse a completed reprojection in the temp directory instead of redoing it.
     #[arg(short, long, default_value_t = false)]
     pub resume: bool,
+    /// Disk budget in GiB the run must fit into. Defaults to the free space on the target device.
+    #[arg(long, default_value = None)]
+    pub disk_budget: Option<u64>,
     #[arg(default_value = "source")]
     pub no_data: PreprocessNoData,
     #[arg(default_value = "source")]

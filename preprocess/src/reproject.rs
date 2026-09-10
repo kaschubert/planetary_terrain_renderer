@@ -1,7 +1,7 @@
 use crate::{
-    dataset::{FaceInfo, PreprocessContext, create_empty_dataset},
+    dataset::{FaceInfo, PreprocessContext, available_bytes, create_empty_dataset},
     gdal_extension::{GDALCustomTransformer, ProgressCallback, SuggestedWarpOutput, warp},
-    result::PreprocessResult,
+    result::{PreprocessError, PreprocessResult},
     transformers::CustomTransformer,
 };
 use bevy_terrain::prelude::AttachmentLabel;
@@ -113,6 +113,74 @@ pub fn reproject<T: Copy + GdalType>(
         .collect::<PreprocessResult<HashMap<_, _>>>()?;
 
     Ok(faces)
+}
+
+/// Refuses to start a run that cannot fit on disk. Both figures are upper bounds: tiles
+/// that turn out to be entirely no-data are never written, and a reprojection only
+/// allocates the blocks the warp actually touches.
+pub(crate) fn check_disk_space<T: Copy + GdalType>(
+    src_dataset: &Dataset,
+    context: &mut PreprocessContext,
+) -> PreprocessResult<()> {
+    const GIB: f64 = (1u64 << 30) as f64;
+
+    // cheap next to the warp itself, and it must happen before anything is deleted
+    let transforms = compute_transforms(src_dataset, context, None)?;
+
+    let sample_size = (size_of::<T>() * context.rasterbands.len()) as u64;
+    let center_size = context.attachment.center_size() as i32;
+
+    let temp_bytes: u64 = transforms
+        .iter()
+        .map(|transform| transform.size.element_product() * sample_size)
+        .sum();
+
+    let tile_count: u64 = transforms
+        .iter()
+        .map(|transform| {
+            let xy_start = transform.pixel_start / center_size;
+            let xy_end = (transform.pixel_end - 1) / center_size + 1;
+            let xy = (xy_end - xy_start).max(IVec2::ZERO);
+
+            xy.x as u64 * xy.y as u64
+        })
+        .sum();
+
+    // the coarser lods add roughly a third on top of the finest one
+    let tile_bytes =
+        tile_count * 4 / 3 * (context.attachment.texture_size as u64).pow(2) * sample_size;
+
+    // A budget given explicitly is enforced; the free space is only reported, because
+    // the figures above are upper bounds and a sparse source can come in far under them.
+    let (available, enforced) = match context.disk_budget {
+        Some(budget) => (budget, true),
+        None => (available_bytes(&context.terrain_path).unwrap_or(u64::MAX), false),
+    };
+
+    println!(
+        "Estimated disk usage: at most {:.1} GiB reprojection + {:.1} GiB tiles = {:.1} GiB, {:.1} GiB available",
+        temp_bytes as f64 / GIB,
+        tile_bytes as f64 / GIB,
+        (temp_bytes + tile_bytes) as f64 / GIB,
+        available as f64 / GIB,
+    );
+
+    if temp_bytes + tile_bytes > available {
+        let error = PreprocessError::InsufficientDiskSpace {
+            needed_gib: (temp_bytes + tile_bytes) as f64 / GIB,
+            temp_gib: temp_bytes as f64 / GIB,
+            tile_gib: tile_bytes as f64 / GIB,
+            available_gib: available as f64 / GIB,
+        };
+
+        if enforced {
+            return Err(error);
+        }
+
+        println!("Warning: {error}. Sources with no-data regions usually need much less.");
+    }
+
+    Ok(())
 }
 
 pub fn compute_transforms<'a>(

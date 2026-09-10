@@ -14,7 +14,7 @@ use crate::{
     dataset::{PreprocessContext, clear_directory, clear_directory_except, delete_directory},
     downsample::downsample_and_stitch,
     fill_no_data::create_mask_and_fill_no_data,
-    reproject::reproject,
+    reproject::{check_disk_space, reproject},
     split::split_and_stitch,
 };
 use bevy_terrain::prelude::*;
@@ -37,6 +37,9 @@ fn preprocess_gen<T: Copy + GdalType + PartialEq + NumCast>(
     src_dataset: Dataset,
     context: &mut PreprocessContext,
 ) {
+    // Before anything is deleted: refuse a run that cannot fit on disk.
+    check_disk_space::<T>(&src_dataset, context).unwrap_or_else(|error| panic!("{error}"));
+
     if context.overwrite {
         // The temp directory sits inside the tile directory unless one was given
         // explicitly, so a resuming run must wipe the tiles around it.

@@ -14,6 +14,17 @@ pub enum PreprocessError {
     Gdal(#[from] GdalError),
     #[error("Parse error")]
     Parse(#[from] ParseFloatError),
+    #[error(
+        "not enough disk space: needs about {needed_gib:.1} GiB \
+         ({temp_gib:.1} GiB reprojection + {tile_gib:.1} GiB tiles), \
+         but only {available_gib:.1} GiB is available"
+    )]
+    InsufficientDiskSpace {
+        needed_gib: f64,
+        temp_gib: f64,
+        tile_gib: f64,
+        available_gib: f64,
+    },
 }
 
 pub type PreprocessResult<T> = Result<T, PreprocessError>;

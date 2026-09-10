@@ -76,6 +76,7 @@ pub struct PreprocessContext {
     pub(crate) create_mask: bool,
     pub(crate) overwrite: bool,
     pub(crate) resume: bool,
+    pub(crate) disk_budget: Option<u64>,
 
     pub(crate) min_height: f32,
     pub(crate) max_height: f32,
@@ -94,6 +95,7 @@ impl PreprocessContext {
             temp_path,
             overwrite,
             resume,
+            disk_budget,
             no_data,
             data_type,
             fill_radius,
@@ -125,6 +127,7 @@ impl PreprocessContext {
             create_mask,
             overwrite,
             resume,
+            disk_budget,
         )
     }
 
@@ -144,6 +147,7 @@ impl PreprocessContext {
         create_mask: bool,
         overwrite: bool,
         resume: bool,
+        disk_budget: Option<u64>,
     ) -> PreprocessResult<(Dataset, Self)> {
         let mut src_datasets = src_path
             .iter()
@@ -212,6 +216,7 @@ impl PreprocessContext {
                 fill_radius,
                 overwrite,
                 resume,
+                disk_budget: disk_budget.map(|gib| gib << 30),
                 min_height: f32::MAX,
                 max_height: f32::MIN,
                 create_mask,
@@ -317,6 +322,25 @@ pub(crate) fn create_empty_dataset<T: Copy + GdalType>(
     }
 
     Ok(dst)
+}
+
+/// Free bytes on the device holding `path`, or the nearest ancestor that exists yet.
+/// Shelling out to df keeps this dependency free, as delete_directory already does.
+pub(crate) fn available_bytes(path: &Path) -> Option<u64> {
+    let existing = path.ancestors().find(|ancestor| ancestor.exists())?;
+
+    let output = Command::new("df")
+        .args(["--output=avail", "-B1"])
+        .arg(existing)
+        .output()
+        .ok()?;
+
+    String::from_utf8_lossy(&output.stdout)
+        .lines()
+        .nth(1)?
+        .trim()
+        .parse()
+        .ok()
 }
 
 pub fn delete_directory(directory: &Path) {
