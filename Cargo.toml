@@ -18,6 +18,11 @@ members = ["preprocess"]
 rand = ["dep:rand"]
 metal_capture = ["dep:metal", "dep:wgpu-core"]
 
+[lints.rust]
+# The AsBindGroup derive expands to cfg(feature = "webgpu"), which is a feature of
+# bevy_render rather than one of ours, so the check would flag every use of it.
+unexpected_cfgs = { level = "warn", check-cfg = ['cfg(feature, values("webgpu"))'] }
+
 [dependencies]
 bevy = "0.17.3"
 bevy_common_assets = { version = "0.14.0", features = ["ron"] }
