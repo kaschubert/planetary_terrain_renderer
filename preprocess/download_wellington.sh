@@ -3,7 +3,7 @@
 # https://github.com/linz/elevation) that beats what download_nz.sh gets for
 # Wellington, one directory per resolution level.
 #
-#   ./download_wellington.sh              # all levels, Wellington city (~81 GiB)
+#   ./download_wellington.sh              # all enabled levels (~39 GiB)
 #   ./download_wellington.sh BQ31         # only the given Topo50 sheets
 #
 # download_nz.sh covers the whole country at 10 m imagery and an 8 m
@@ -12,7 +12,8 @@
 #
 #   source_data/wellington/height/1m       LiDAR DEM      3 tiles    1.6 GiB
 #   source_data/wellington/albedo/0.075m   aerial 2025  505 tiles   37.0 GiB
-#   source_data/wellington/albedo/0.2m     aerial 2025  147 tiles   42.7 GiB
+#
+# The 0.2 m region-wide level is commented out below rather than removed.
 #
 # Tile counts and sizes are for the default sheets. 1 m is the finest elevation
 # LINZ publishes anywhere in New Zealand, so height has a single level.
@@ -52,7 +53,9 @@ HEIGHT_LEVELS=(
 )
 ALBEDO_LEVELS=(
     "0.075m  nz:nz-imagery/wellington/wellington_2025_0.075m/rgb/2193"
-    "0.2m    nz:nz-imagery/wellington/wellington_2025_0.2m/rgb/2193"
+    # Region-wide colour at 0.2 m, 42.7 GiB for the default sheets. Uncomment to fetch
+    # the coast and hills the 0.075 m survey leaves out.
+    #"0.2m    nz:nz-imagery/wellington/wellington_2025_0.2m/rgb/2193"
 )
 
 command -v rclone >/dev/null || {
