@@ -8,67 +8,109 @@ use gdal::{
     errors::{GdalError, Result as GdalResult},
 };
 use gdal_sys::{
-    CPLErr, CPLErrorReset, CPLGetLastErrorMsg, CPLGetLastErrorNo, GDALAccess::GA_Update,
-    GDALChunkAndWarpImage, GDALCreateWarpOptions, GDALDestroyWarpOperation, GDALDestroyWarpOptions,
-    GDALDummyProgress, GDALFillNodata, GDALOpenShared, GDALResampleAlg, GDALSuggestedWarpOutput,
+    CPLErr, CPLErrorReset, CPLGetLastErrorMsg, CPLGetLastErrorNo, CSLSetNameValue,
+    GDALAccess::GA_Update, GDALChunkAndWarpImage, GDALCreateWarpOptions, GDALDestroyWarpOperation,
+    GDALDestroyWarpOptions, GDALDummyProgress, GDALFillNodata, GDALOpenShared, GDALResampleAlg,
+    GDALSuggestedWarpOutput,
 };
 use glam::U64Vec2;
 use itertools::Itertools;
 use std::{
+    env,
     ffi::{CStr, CString, c_char, c_double, c_int, c_void},
     os::unix::ffi::OsStrExt,
     path::Path,
     ptr, slice,
+    sync::Arc,
     sync::atomic::{AtomicU64, Ordering},
 };
 use thread_local::ThreadLocal;
 
-type UnusedFunction = unsafe extern "C" fn(_: *mut c_void) -> *mut c_void;
-#[unsafe(no_mangle)]
-pub extern "C" fn unused_function(_: *mut c_void) -> *mut c_void {
-    ptr::null_mut()
-}
-
+// The slots below mirror GDALTransformerInfo from gdal_alg.h. Their signatures have to
+// match exactly: GDALDestroyTransformer calls pfn_cleanup with no null check, and
+// GDALCloneTransformer null-checks pfn_serialize before using it.
+type TransformFunc = unsafe extern "C" fn(
+    *mut c_void,
+    c_int,
+    c_int,
+    *mut f64,
+    *mut f64,
+    *mut f64,
+    *mut c_int,
+) -> c_int;
+type CleanupFunc = unsafe extern "C" fn(*mut c_void);
+type SerializeFunc = unsafe extern "C" fn(*mut c_void) -> *mut c_void;
 type CreateSimilarFunc = unsafe extern "C" fn(
     transformer_arg: *mut c_void,
     src_ratio_x: f64,
     src_ratio_y: f64,
 ) -> *mut c_void;
 
+/// Cleanup for the transformer this process owns. GDAL calls it on every entry of its
+/// thread-to-transformer map, including the original it only borrowed, so the original
+/// must not free itself.
+unsafe extern "C" fn no_cleanup(_: *mut c_void) {}
+
 #[repr(C)]
 pub struct GDALTransformerInfo {
     aby_signature: [u8; 4],
     psz_class_name: *const c_char,
-    pfn_transform: UnusedFunction, // function pointer, that must not be accessed
-    pfn_cleanup: UnusedFunction,   // function pointer, that must not be accessed
-    pfn_serialize: UnusedFunction, // function pointer, that must not be accessed
+    pfn_transform: TransformFunc,
+    pfn_cleanup: CleanupFunc,
+    pfn_serialize: Option<SerializeFunc>,
     pfn_create_similar: Option<CreateSimilarFunc>,
 }
 
+// Every field is a function pointer or a 'static C string that GDAL only ever reads.
+unsafe impl Send for GDALTransformerInfo {}
+unsafe impl Sync for GDALTransformerInfo {}
+
 impl GDALTransformerInfo {
-    pub(crate) fn new(similar_func: CreateSimilarFunc) -> Self {
+    /// The transformer owned by this process, which GDAL borrows but must never free.
+    pub(crate) fn owner(similar_func: CreateSimilarFunc) -> Self {
+        Self::with_cleanup(similar_func, no_cleanup)
+    }
+
+    /// A clone handed to GDAL, which frees it through pfn_cleanup in GWKThreadsEnd.
+    pub(crate) fn gdal_owned_clone(
+        similar_func: CreateSimilarFunc,
+        cleanup_func: CleanupFunc,
+    ) -> Self {
+        Self::with_cleanup(similar_func, cleanup_func)
+    }
+
+    fn with_cleanup(similar_func: CreateSimilarFunc, cleanup_func: CleanupFunc) -> Self {
         Self {
             aby_signature: *b"GTI2",
-            psz_class_name: c"Test".as_ptr(),
-            pfn_transform: unused_function,
-            pfn_cleanup: unused_function,
-            pfn_serialize: unused_function,
+            psz_class_name: c"BevyTerrainCustomTransformer".as_ptr(),
+            pfn_transform: transformer_c,
+            pfn_cleanup: cleanup_func,
+            pfn_serialize: None,
             pfn_create_similar: Some(similar_func),
         }
     }
 }
 
+/// repr(C) with info first is load-bearing: GDALDestroyTransformer and
+/// GDALCloneTransformer check the leading "GTI2" signature before touching anything else.
 #[repr(C)]
 pub struct GDALCustomTransformer {
     pub(crate) info: GDALTransformerInfo,
-    pub(crate) inner: Box<dyn Transformer>,
+    pub(crate) inner: Arc<dyn Transformer>,
 }
+
+const _: () = {
+    // A clone is boxed on a GDAL worker and dropped on the thread that ends the warp, and
+    // the original is shared across workers, so both bounds have to hold.
+    const fn assert_send_sync<T: Send + Sync>() {}
+    assert_send_sync::<GDALCustomTransformer>();
+};
 
 pub fn warp(
     src: &Dataset,
     dst: &Dataset,
     context: &PreprocessContext,
-    transformer: &mut GDALCustomTransformer,
+    transformer: &GDALCustomTransformer,
     mut progress_callback: Option<&ProgressCallback>,
 ) -> PreprocessResult<()> {
     let (width, height) = dst.raster_size();
@@ -110,12 +152,29 @@ pub fn warp(
     };
 
     options.pfnTransformer = Some(transformer_c);
-    options.pTransformerArg = ptr::addr_of_mut!(*transformer).cast();
+    options.pTransformerArg = ptr::from_ref(transformer).cast_mut().cast();
 
     (options.pfnProgress, options.pProgressArg) = match progress_callback.as_mut() {
         None => (Some(GDALDummyProgress as _), ptr::null_mut()),
         Some(callback) => (Some(progress_c as _), ptr::addr_of_mut!(*callback).cast()),
     };
+
+    // Threading is switched on per warp rather than through GDAL_NUM_THREADS, which would
+    // apply process-wide. GWKThreadsCreate reads this option first and only then falls back
+    // to the config option, and it runs inside GDALCreateWarpOperation, so it has to be set
+    // before that call. The list is freed by GDALDestroyWarpOptions below.
+    //
+    // Setting GDAL_NUM_THREADS explicitly suppresses the option, so that variable still
+    // works as an override - which is what makes a single-threaded comparison run possible.
+    if env::var_os("GDAL_NUM_THREADS").is_none() {
+        options.papszWarpOptions = unsafe {
+            CSLSetNameValue(
+                options.papszWarpOptions,
+                c"NUM_THREADS".as_ptr(),
+                c"ALL_CPUS".as_ptr(),
+            )
+        };
+    }
 
     unsafe {
         let operation = gdal_sys::GDALCreateWarpOperation(options);
@@ -190,19 +249,21 @@ impl<'a> CountingProgressCallback<'a> {
     }
 }
 
-pub trait Transformer {
+/// Takes &self, not &mut self: GDAL calls this concurrently from its warp workers, and
+/// one of them always runs on the original transformer rather than a clone.
+pub trait Transformer: Send + Sync {
     fn transform(
-        &mut self,
+        &self,
         dst_to_src: bool,
         x: &mut [f64],
         y: &mut [f64],
         z: &mut [f64],
-        success: &mut [bool],
+        success: &mut [c_int],
     ) -> PreprocessResult<()>;
 }
 
 #[unsafe(no_mangle)]
-pub extern "C" fn transformer_c(
+pub unsafe extern "C" fn transformer_c(
     arg: *mut c_void,
     dst_to_src: c_int,
     n_point_count: c_int,
@@ -212,30 +273,32 @@ pub extern "C" fn transformer_c(
     pan_success: *mut c_int,
 ) -> c_int {
     assert!(!arg.is_null());
-    let transformer = unsafe { arg.cast::<GDALCustomTransformer>().as_mut().unwrap() };
+    // as_ref, not as_mut: several threads hold this pointer at once.
+    let transformer = unsafe { arg.cast::<GDALCustomTransformer>().as_ref().unwrap() };
     let n_point_count = n_point_count as usize;
 
-    let bool_success = pan_success.cast();
+    // GDAL hands us the array it allocated with CPLMalloc and never initialised, so it is
+    // borrowed as [c_int] rather than [bool] - uninitialised bytes are not valid bools.
+    let success = unsafe { slice::from_raw_parts_mut(pan_success, n_point_count) };
 
-    let rv = transformer
-        .inner
-        .transform(
-            dst_to_src != 0,
-            unsafe { slice::from_raw_parts_mut(x, n_point_count) },
-            unsafe { slice::from_raw_parts_mut(y, n_point_count) },
-            unsafe { slice::from_raw_parts_mut(z, n_point_count) },
-            unsafe { slice::from_raw_parts_mut(bool_success, n_point_count) },
-        )
-        .map_or(0, |()| 1);
-
-    // Transform from [bool] to [c_int] since `size_of::<bool>() == 1`
-    for i in (0..n_point_count).rev() {
-        unsafe {
-            *pan_success.add(i) = (*bool_success.add(i)) as c_int;
+    match transformer.inner.transform(
+        dst_to_src != 0,
+        unsafe { slice::from_raw_parts_mut(x, n_point_count) },
+        unsafe { slice::from_raw_parts_mut(y, n_point_count) },
+        unsafe { slice::from_raw_parts_mut(z, n_point_count) },
+        success,
+    ) {
+        Ok(()) => 1,
+        Err(error) => {
+            // The warp kernel discards this return value and reads only pan_success, so a
+            // failure has to be reported there or it is silently taken for success.
+            success.fill(0);
+            // GWKRun only propagates a worker failure as a flag, and CPL's error state is
+            // thread local, so the message would otherwise never reach the caller.
+            eprintln!("transform failed: {error}");
+            0
         }
     }
-
-    rv
 }
 
 pub struct SuggestedWarpOutput {
@@ -246,7 +309,7 @@ pub struct SuggestedWarpOutput {
 impl SuggestedWarpOutput {
     pub fn compute(
         src: &Dataset,
-        transformer: &mut GDALCustomTransformer,
+        transformer: &GDALCustomTransformer,
     ) -> GdalResult<Option<SuggestedWarpOutput>> {
         let _gag_stderr = Gag::stderr();
 
@@ -257,7 +320,7 @@ impl SuggestedWarpOutput {
             GDALSuggestedWarpOutput(
                 src.c_dataset(),
                 Some(transformer_c),
-                ptr::addr_of_mut!(*transformer).cast(),
+                ptr::from_ref(transformer).cast_mut().cast(),
                 geo_transform.as_mut_ptr(),
                 &mut width,
                 &mut height,

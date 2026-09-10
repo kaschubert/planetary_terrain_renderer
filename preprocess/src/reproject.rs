@@ -77,7 +77,7 @@ pub fn reproject<T: Copy + GdalType>(
                     &src_dataset,
                     &dst_dataset,
                     &context,
-                    &mut transform.transformer,
+                    &transform.transformer,
                     transform.progress_callback.as_deref(),
                 )?;
 
@@ -154,7 +154,10 @@ pub(crate) fn check_disk_space<T: Copy + GdalType>(
     // the figures above are upper bounds and a sparse source can come in far under them.
     let (available, enforced) = match context.disk_budget {
         Some(budget) => (budget, true),
-        None => (available_bytes(&context.terrain_path).unwrap_or(u64::MAX), false),
+        None => (
+            available_bytes(&context.terrain_path).unwrap_or(u64::MAX),
+            false,
+        ),
     };
 
     println!(
@@ -193,12 +196,12 @@ pub fn compute_transforms<'a>(
     let mut total_area = 0.0;
 
     for face in 0..6 {
-        let mut transformer = CustomTransformer::new(src_dataset, face, None)?;
+        let transformer = CustomTransformer::new(src_dataset, face, None)?;
 
         let Some(SuggestedWarpOutput {
             size,
             mut geo_transform,
-        }) = SuggestedWarpOutput::compute(src_dataset, &mut transformer)?
+        }) = SuggestedWarpOutput::compute(src_dataset, &transformer)?
         else {
             continue;
         };

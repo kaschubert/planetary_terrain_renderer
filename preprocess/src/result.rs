@@ -10,6 +10,11 @@ pub enum PreprocessError {
     TransformOperationFailed,
     #[error("The no data value is outside of the datatypes range.")]
     NoDataOutOfRange,
+    #[error(
+        "the spatial reference does not survive a WKT round trip with its axis mapping intact, \
+         so it cannot be rebuilt per thread"
+    )]
+    AxisMappingNotPreserved,
     #[error("GDAL error")]
     Gdal(#[from] GdalError),
     #[error("Parse error")]
