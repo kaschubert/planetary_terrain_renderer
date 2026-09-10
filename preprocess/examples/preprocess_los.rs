@@ -13,6 +13,7 @@ fn main() {
         terrain_path: "assets/terrains/los".into(),
         temp_path: None,
         overwrite: true,
+        resume: false,
         no_data: PreprocessNoData::Source,
         data_type: PreprocessDataType::DataType(GdalDataType::Float32),
         fill_radius: 32.0,

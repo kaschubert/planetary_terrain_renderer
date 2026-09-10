@@ -8,7 +8,7 @@ use bevy_terrain::prelude::AttachmentLabel;
 use gdal::{Dataset, GeoTransform, GeoTransformEx, raster::GdalType};
 use glam::{DVec2, IVec2, U64Vec2};
 use itertools::Itertools;
-use std::collections::HashMap;
+use std::{collections::HashMap, fs};
 
 pub struct Transform<'a> {
     pub transformer: GDALCustomTransformer,
@@ -38,20 +38,51 @@ pub fn reproject<T: Copy + GdalType>(
         .iter_mut()
         .map(|transform| {
             let dst_path = context.temp_dir.join(format!("face{}.tif", transform.face));
-            let dst_dataset = create_empty_dataset::<T>(
-                &dst_path,
-                transform.size,
-                Some(transform.geo_transform),
-                &context,
-            )?;
+            // Warp into a .partial file and rename once it is complete, so an
+            // interrupted run never leaves a truncated raster under the name a
+            // later resume would trust.
+            let partial_path = dst_path.with_extension("tif.partial");
 
-            warp(
-                &src_dataset,
-                &dst_dataset,
-                &context,
-                &mut transform.transformer,
-                transform.progress_callback.as_deref(),
-            )?;
+            // Only reuse a raster that matches what this run would have created.
+            // The file name says nothing about the settings it was warped with, so a
+            // run with a different size, band count or data type must warp again
+            // rather than silently inherit the previous one.
+            let existing = (context.resume && dst_path.is_file())
+                .then(|| Dataset::open(&dst_path).ok())
+                .flatten()
+                .filter(|dataset| {
+                    dataset.raster_size() == (transform.size.x as usize, transform.size.y as usize)
+                        && dataset.raster_count() == context.rasterbands.len()
+                        && dataset
+                            .rasterband(1)
+                            .is_ok_and(|band| band.band_type() == T::datatype())
+                });
+            let reused = existing.is_some();
+
+            let dst_dataset = if let Some(dst_dataset) = existing {
+                if let Some(progress_callback) = transform.progress_callback.as_deref() {
+                    progress_callback(1.0);
+                }
+
+                dst_dataset
+            } else {
+                let dst_dataset = create_empty_dataset::<T>(
+                    &partial_path,
+                    transform.size,
+                    Some(transform.geo_transform),
+                    &context,
+                )?;
+
+                warp(
+                    &src_dataset,
+                    &dst_dataset,
+                    &context,
+                    &mut transform.transformer,
+                    transform.progress_callback.as_deref(),
+                )?;
+
+                dst_dataset
+            };
 
             if matches!(context.attachment_label, AttachmentLabel::Height) {
                 let min_max = dst_dataset
@@ -62,6 +93,11 @@ pub fn reproject<T: Copy + GdalType>(
 
                 context.min_height = context.min_height.min(min_max.min as f32);
                 context.max_height = context.max_height.max(min_max.max as f32);
+            }
+
+            if !reused {
+                drop(dst_dataset); // flush to disk before the rename publishes the result
+                fs::rename(&partial_path, &dst_path).unwrap();
             }
 
             Ok((

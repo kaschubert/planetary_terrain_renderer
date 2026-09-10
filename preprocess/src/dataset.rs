@@ -75,6 +75,7 @@ pub struct PreprocessContext {
     pub(crate) fill_radius: f32,
     pub(crate) create_mask: bool,
     pub(crate) overwrite: bool,
+    pub(crate) resume: bool,
 
     pub(crate) min_height: f32,
     pub(crate) max_height: f32,
@@ -92,6 +93,7 @@ impl PreprocessContext {
             terrain_path,
             temp_path,
             overwrite,
+            resume,
             no_data,
             data_type,
             fill_radius,
@@ -122,6 +124,7 @@ impl PreprocessContext {
             fill_radius,
             create_mask,
             overwrite,
+            resume,
         )
     }
 
@@ -140,6 +143,7 @@ impl PreprocessContext {
         fill_radius: f32,
         create_mask: bool,
         overwrite: bool,
+        resume: bool,
     ) -> PreprocessResult<(Dataset, Self)> {
         let mut src_datasets = src_path
             .iter()
@@ -207,6 +211,7 @@ impl PreprocessContext {
                 temp_dir,
                 fill_radius,
                 overwrite,
+                resume,
                 min_height: f32::MAX,
                 max_height: f32::MIN,
                 create_mask,
@@ -328,6 +333,31 @@ pub fn delete_directory(directory: &Path) {
 pub fn clear_directory(directory: &Path) {
     delete_directory(directory);
     fs::create_dir_all(directory).unwrap();
+}
+
+/// Clears `directory`, but leaves `keep` alone. The temp directory lives inside the
+/// tile directory by default, so resuming has to spare it while wiping the tiles.
+pub fn clear_directory_except(directory: &Path, keep: &Path) {
+    if !directory.is_dir() {
+        fs::create_dir_all(directory).unwrap();
+        return;
+    }
+
+    // Compare canonical paths: an explicitly given temp directory may be spelled
+    // differently than the entries read back here, and a mismatch would delete the
+    // very directory the resume relies on.
+    let keep = keep.canonicalize().ok();
+
+    for entry in fs::read_dir(directory).unwrap() {
+        let path = entry.unwrap().path();
+        let spare = keep
+            .as_ref()
+            .is_some_and(|keep| path.canonicalize().is_ok_and(|path| &path == keep));
+
+        if !spare {
+            delete_directory(&path);
+        }
+    }
 }
 
 pub fn iter_directory(directory: &Path) -> impl Iterator<Item = PathBuf> {

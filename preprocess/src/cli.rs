@@ -22,6 +22,9 @@ pub struct Cli {
 
     #[arg(short, long, default_value_t = false)]
     pub overwrite: bool,
+    /// Reuse a completed reprojection in the temp directory instead of redoing it.
+    #[arg(short, long, default_value_t = false)]
+    pub resume: bool,
     #[arg(default_value = "source")]
     pub no_data: PreprocessNoData,
     #[arg(default_value = "source")]
