@@ -55,7 +55,14 @@ fn main() {
     preprocess(src_dataset, &mut context);
 
     let args = Cli {
-        src_path: vec!["preprocess/source_data/wellington/albedo/0.075m".into()],
+        // Both levels feed the one attachment. The coarser one is listed first, so the
+        // finer one wins where they overlap: gdalbuildvrt draws later sources on top.
+        // 0.075 m only covers the urban footprint, 0.2 m covers the sheets in full, and
+        // the grid this terrain samples is around 0.6 m either way.
+        src_path: vec![
+            "preprocess/source_data/wellington/albedo/0.2m".into(),
+            "preprocess/source_data/wellington/albedo/0.075m".into(),
+        ],
         terrain_path: "assets/terrains/wellington".into(),
         temp_path: None,
         overwrite: true,
