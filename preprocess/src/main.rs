@@ -1,18 +1,11 @@
 use bevy_terrain_preprocess::prelude::*;
 use clap::Parser;
-use std::env::set_var;
 
 fn main() {
-    unsafe {
-        if true {
-            set_var("RAYON_NUM_THREADS", "0");
-            set_var("GDAL_NUM_THREADS", "ALL_CPUS");
-        } else {
-            set_var("RAYON_NUM_THREADS", "1");
-            set_var("GDAL_NUM_THREADS", "1");
-        }
-    }
-
+    // GDAL_NUM_THREADS is deliberately left alone. Setting it to ALL_CPUS makes the
+    // warper call pfnTransformer from several threads at once, and transformer_c hands
+    // each of them a &mut to the same GDALCustomTransformer, which segfaults. Warping
+    // in parallel needs a transformer per thread first.
     let args = Cli::parse();
     let (src_dataset, mut context) = PreprocessContext::from_cli(args).unwrap();
 

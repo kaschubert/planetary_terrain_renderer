@@ -1,14 +1,14 @@
 use crate::{
-    dataset::{FaceInfo, PreprocessContext, create_empty_dataset},
+    dataset::{FaceInfo, PreprocessContext, available_bytes, create_empty_dataset},
     gdal_extension::{GDALCustomTransformer, ProgressCallback, SuggestedWarpOutput, warp},
-    result::PreprocessResult,
+    result::{PreprocessError, PreprocessResult},
     transformers::CustomTransformer,
 };
 use bevy_terrain::prelude::AttachmentLabel;
 use gdal::{Dataset, GeoTransform, GeoTransformEx, raster::GdalType};
 use glam::{DVec2, IVec2, U64Vec2};
 use itertools::Itertools;
-use std::collections::HashMap;
+use std::{collections::HashMap, fs};
 
 pub struct Transform<'a> {
     pub transformer: GDALCustomTransformer,
@@ -38,20 +38,51 @@ pub fn reproject<T: Copy + GdalType>(
         .iter_mut()
         .map(|transform| {
             let dst_path = context.temp_dir.join(format!("face{}.tif", transform.face));
-            let dst_dataset = create_empty_dataset::<T>(
-                &dst_path,
-                transform.size,
-                Some(transform.geo_transform),
-                &context,
-            )?;
+            // Warp into a .partial file and rename once it is complete, so an
+            // interrupted run never leaves a truncated raster under the name a
+            // later resume would trust.
+            let partial_path = dst_path.with_extension("tif.partial");
 
-            warp(
-                &src_dataset,
-                &dst_dataset,
-                &context,
-                &mut transform.transformer,
-                transform.progress_callback.as_deref(),
-            )?;
+            // Only reuse a raster that matches what this run would have created.
+            // The file name says nothing about the settings it was warped with, so a
+            // run with a different size, band count or data type must warp again
+            // rather than silently inherit the previous one.
+            let existing = (context.resume && dst_path.is_file())
+                .then(|| Dataset::open(&dst_path).ok())
+                .flatten()
+                .filter(|dataset| {
+                    dataset.raster_size() == (transform.size.x as usize, transform.size.y as usize)
+                        && dataset.raster_count() == context.rasterbands.len()
+                        && dataset
+                            .rasterband(1)
+                            .is_ok_and(|band| band.band_type() == T::datatype())
+                });
+            let reused = existing.is_some();
+
+            let dst_dataset = if let Some(dst_dataset) = existing {
+                if let Some(progress_callback) = transform.progress_callback.as_deref() {
+                    progress_callback(1.0);
+                }
+
+                dst_dataset
+            } else {
+                let dst_dataset = create_empty_dataset::<T>(
+                    &partial_path,
+                    transform.size,
+                    Some(transform.geo_transform),
+                    &context,
+                )?;
+
+                warp(
+                    &src_dataset,
+                    &dst_dataset,
+                    &context,
+                    &transform.transformer,
+                    transform.progress_callback.as_deref(),
+                )?;
+
+                dst_dataset
+            };
 
             if matches!(context.attachment_label, AttachmentLabel::Height) {
                 let min_max = dst_dataset
@@ -62,6 +93,11 @@ pub fn reproject<T: Copy + GdalType>(
 
                 context.min_height = context.min_height.min(min_max.min as f32);
                 context.max_height = context.max_height.max(min_max.max as f32);
+            }
+
+            if !reused {
+                drop(dst_dataset); // flush to disk before the rename publishes the result
+                fs::rename(&partial_path, &dst_path).unwrap();
             }
 
             Ok((
@@ -79,6 +115,77 @@ pub fn reproject<T: Copy + GdalType>(
     Ok(faces)
 }
 
+/// Refuses to start a run that cannot fit on disk. Both figures are upper bounds: tiles
+/// that turn out to be entirely no-data are never written, and a reprojection only
+/// allocates the blocks the warp actually touches.
+pub(crate) fn check_disk_space<T: Copy + GdalType>(
+    src_dataset: &Dataset,
+    context: &mut PreprocessContext,
+) -> PreprocessResult<()> {
+    const GIB: f64 = (1u64 << 30) as f64;
+
+    // cheap next to the warp itself, and it must happen before anything is deleted
+    let transforms = compute_transforms(src_dataset, context, None)?;
+
+    let sample_size = (size_of::<T>() * context.rasterbands.len()) as u64;
+    let center_size = context.attachment.center_size() as i32;
+
+    let temp_bytes: u64 = transforms
+        .iter()
+        .map(|transform| transform.size.element_product() * sample_size)
+        .sum();
+
+    let tile_count: u64 = transforms
+        .iter()
+        .map(|transform| {
+            let xy_start = transform.pixel_start / center_size;
+            let xy_end = (transform.pixel_end - 1) / center_size + 1;
+            let xy = (xy_end - xy_start).max(IVec2::ZERO);
+
+            xy.x as u64 * xy.y as u64
+        })
+        .sum();
+
+    // the coarser lods add roughly a third on top of the finest one
+    let tile_bytes =
+        tile_count * 4 / 3 * (context.attachment.texture_size as u64).pow(2) * sample_size;
+
+    // A budget given explicitly is enforced; the free space is only reported, because
+    // the figures above are upper bounds and a sparse source can come in far under them.
+    let (available, enforced) = match context.disk_budget {
+        Some(budget) => (budget, true),
+        None => (
+            available_bytes(&context.terrain_path).unwrap_or(u64::MAX),
+            false,
+        ),
+    };
+
+    println!(
+        "Estimated disk usage: at most {:.1} GiB reprojection + {:.1} GiB tiles = {:.1} GiB, {:.1} GiB available",
+        temp_bytes as f64 / GIB,
+        tile_bytes as f64 / GIB,
+        (temp_bytes + tile_bytes) as f64 / GIB,
+        available as f64 / GIB,
+    );
+
+    if temp_bytes + tile_bytes > available {
+        let error = PreprocessError::InsufficientDiskSpace {
+            needed_gib: (temp_bytes + tile_bytes) as f64 / GIB,
+            temp_gib: temp_bytes as f64 / GIB,
+            tile_gib: tile_bytes as f64 / GIB,
+            available_gib: available as f64 / GIB,
+        };
+
+        if enforced {
+            return Err(error);
+        }
+
+        println!("Warning: {error}. Sources with no-data regions usually need much less.");
+    }
+
+    Ok(())
+}
+
 pub fn compute_transforms<'a>(
     src_dataset: &Dataset,
     context: &mut PreprocessContext,
@@ -89,12 +196,12 @@ pub fn compute_transforms<'a>(
     let mut total_area = 0.0;
 
     for face in 0..6 {
-        let mut transformer = CustomTransformer::new(src_dataset, face, None)?;
+        let transformer = CustomTransformer::new(src_dataset, face, None)?;
 
         let Some(SuggestedWarpOutput {
             size,
             mut geo_transform,
-        }) = SuggestedWarpOutput::compute(src_dataset, &mut transformer)?
+        }) = SuggestedWarpOutput::compute(src_dataset, &transformer)?
         else {
             continue;
         };

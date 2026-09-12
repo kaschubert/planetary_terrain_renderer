@@ -11,10 +11,10 @@ mod transformers;
 
 use crate::{
     cli::PreprocessBar,
-    dataset::{PreprocessContext, clear_directory, delete_directory},
+    dataset::{PreprocessContext, clear_directory, clear_directory_except, delete_directory},
     downsample::downsample_and_stitch,
     fill_no_data::create_mask_and_fill_no_data,
-    reproject::reproject,
+    reproject::{check_disk_space, reproject},
     split::split_and_stitch,
 };
 use bevy_terrain::prelude::*;
@@ -23,7 +23,7 @@ use gdal::{
     raster::{GdalDataType, GdalType},
 };
 use num::NumCast;
-use std::time::Instant;
+use std::{fs, time::Instant};
 
 pub mod prelude {
     pub use crate::{
@@ -37,11 +37,26 @@ fn preprocess_gen<T: Copy + GdalType + PartialEq + NumCast>(
     src_dataset: Dataset,
     context: &mut PreprocessContext,
 ) {
+    // Before anything is deleted: refuse a run that cannot fit on disk.
+    check_disk_space::<T>(&src_dataset, context).unwrap_or_else(|error| panic!("{error}"));
+
     if context.overwrite {
-        clear_directory(&context.tile_dir);
+        // The temp directory sits inside the tile directory unless one was given
+        // explicitly, so a resuming run must wipe the tiles around it.
+        if context.resume {
+            clear_directory_except(&context.tile_dir, &context.temp_dir);
+        } else {
+            clear_directory(&context.tile_dir);
+        }
     }
 
-    clear_directory(&context.temp_dir);
+    // Resuming keeps the temp directory so a completed reprojection can be reused.
+    // Otherwise wipe it, which also clears any .partial left by an interrupted run.
+    if context.resume {
+        fs::create_dir_all(&context.temp_dir).unwrap();
+    } else {
+        clear_directory(&context.temp_dir);
+    }
 
     let start_preprocessing = Instant::now();
 

@@ -9,7 +9,7 @@ use crate::{
 use bevy::{
     prelude::*,
     render::{Extract, RenderApp, render_resource::*},
-    window::PrimaryWindow,
+    window::{CursorOptions, PrimaryWindow},
 };
 
 mod approximation_debug;
@@ -312,9 +312,9 @@ pub(crate) fn debug_lighting(mut commands: Commands) {
     });
 }
 
-pub fn debug_window(mut window: Query<&mut Window, With<PrimaryWindow>>) {
-    let mut window = window.single_mut().unwrap();
-    window.cursor_options.visible = true; // false;
+pub fn debug_window(mut window: Query<&mut CursorOptions, With<PrimaryWindow>>) {
+    let mut cursor_options = window.single_mut().unwrap();
+    cursor_options.visible = true; // false;
 }
 
 #[derive(Resource, Default)]

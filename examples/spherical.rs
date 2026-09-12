@@ -1,8 +1,15 @@
+use bevy::math::DVec3;
 use bevy::window::WindowResolution;
-use bevy::{prelude::*, reflect::TypePath, render::render_resource::*};
+use bevy::{prelude::*, reflect::TypePath, render::render_resource::*, shader::ShaderRef};
+use bevy_terrain::math::Coordinate;
 use bevy_terrain::prelude::*;
 
 const RADIUS: f64 = 6371000.0;
+
+// Where the camera starts: over Wellington, the finest terrain in the scene.
+const CAMERA_LONGITUDE: f64 = 174.7762;
+const CAMERA_LATITUDE: f64 = -41.2866;
+const CAMERA_ALTITUDE: f32 = 1000.0;
 
 #[derive(ShaderType, Clone)]
 struct GradientInfo {
@@ -30,7 +37,7 @@ fn main() {
             DefaultPlugins
                 .set(WindowPlugin {
                     primary_window: Some(Window {
-                        resolution: WindowResolution::new(1920.0, 1080.0),
+                        resolution: WindowResolution::new(1920, 1080),
                         ..default()
                     }),
                     ..default()
@@ -70,11 +77,30 @@ fn initialize(
 
     let mut view = Entity::PLACEHOLDER;
 
+    // Longitude and latitude to a position on the spheroid. The unit sphere convention
+    // matches the one the preprocessor warps with, see CubeTransformer in transformers.rs.
+    let (longitude, latitude) = (CAMERA_LONGITUDE.to_radians(), CAMERA_LATITUDE.to_radians());
+    let up = DVec3::new(
+        -latitude.cos() * longitude.cos(),
+        latitude.sin(),
+        latitude.cos() * longitude.sin(),
+    );
+    let north = DVec3::new(
+        latitude.sin() * longitude.cos(),
+        latitude.cos(),
+        -latitude.sin() * longitude.sin(),
+    );
+
+    let camera_position = Coordinate::from_unit_position(up, true)
+        .local_position(TerrainShape::WGS84, CAMERA_ALTITUDE);
+    // Tilted halfway between straight down and the horizon, facing north over the harbour.
+    let camera_direction = (north - up).normalize();
+
     commands.spawn_big_space(Grid::default(), |root| {
         view = root
             .spawn_spatial((
-                Transform::from_translation(-Vec3::X * RADIUS as f32 * 3.0)
-                    .looking_to(Vec3::X, Vec3::Y),
+                Transform::from_translation(camera_position.as_vec3())
+                    .looking_to(camera_direction.as_vec3(), up.as_vec3()),
                 DebugCameraController::new(RADIUS),
                 OrbitalCameraController::default(),
             ))
@@ -91,18 +117,18 @@ fn initialize(
         view,
     );
 
-    // commands.spawn_terrain(
-    //     asset_server.load("terrains/los/config.tc.ron"),
-    //     TerrainViewConfig {
-    //         order: 1,
-    //         ..default()
-    //     },
-    //     CustomMaterial {
-    //         gradient: gradient2.clone(),
-    //         gradient_info: GradientInfo { mode: 0 },
-    //     },
-    //     view,
-    // );
+    commands.spawn_terrain(
+        asset_server.load("terrains/los/config.tc.ron"),
+        TerrainViewConfig {
+            order: 1,
+            ..default()
+        },
+        CustomMaterial {
+            gradient: gradient2.clone(),
+            gradient_info: GradientInfo { mode: 0 },
+        },
+        view,
+    );
     // //
     // commands.spawn_terrain(
     //     asset_server.load("terrains/npd/config.tc.ron"),
@@ -143,18 +169,52 @@ fn initialize(
     //     view,
     // );
     //
-    // commands.spawn_terrain(
-    //     asset_server.load("terrains/swiss/config.tc.ron"),
-    //     TerrainViewConfig {
-    //         order: 1,
-    //         ..default()
-    //     },
-    //     CustomMaterial {
-    //         gradient: gradient1.clone(),
-    //         gradient_info: GradientInfo { mode: 1 },
-    //     },
-    //     view,
-    // );
+    // LINZ New Zealand dataset: download and preprocess it first, see
+    // preprocess/download_nz.sh and preprocess/examples/preprocess_nz.rs
+    commands.spawn_terrain(
+        asset_server.load("terrains/nz/config.tc.ron"),
+        TerrainViewConfig {
+            order: 1,
+            ..default()
+        },
+        CustomMaterial {
+            gradient: gradient1.clone(),
+            gradient_info: GradientInfo { mode: 2 },
+        },
+        view,
+    );
+
+    // High-resolution Wellington: 1 m LiDAR elevation and 0.075 m aerial colour, see
+    // preprocess/download_wellington.sh and preprocess/examples/preprocess_wellington.rs.
+    // The 0.075 m survey only flew Wellington city, so colour covers about a quarter of
+    // the elevation; the rest has geometry but no imagery.
+    commands.spawn_terrain(
+        asset_server.load("terrains/wellington/config.tc.ron"),
+        TerrainViewConfig {
+            // Above the nz terrain it sits inside: the stencil test keeps whichever
+            // order is greatest where two terrains cover the same ground.
+            order: 2,
+            ..default()
+        },
+        CustomMaterial {
+            gradient: gradient1.clone(),
+            gradient_info: GradientInfo { mode: 2 },
+        },
+        view,
+    );
+
+    commands.spawn_terrain(
+        asset_server.load("terrains/swiss/config.tc.ron"),
+        TerrainViewConfig {
+            order: 1,
+            ..default()
+        },
+        CustomMaterial {
+            gradient: gradient1.clone(),
+            gradient_info: GradientInfo { mode: 1 },
+        },
+        view,
+    );
     //
     // commands.spawn_terrain(
     //     asset_server.load("terrains/hartenstein/config.tc.ron"),

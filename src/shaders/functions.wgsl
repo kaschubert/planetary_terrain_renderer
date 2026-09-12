@@ -4,7 +4,7 @@
 #import bevy_terrain::types::{TileCoordinate, WorldCoordinate, TileTree, TileTreeEntry, AtlasTile, Blend, BestLookup, Coordinate, Morph, TangentSpace}
 #import bevy_render::maths::{affine3_to_square, mat2x4_f32_to_mat3x3_unpack}
 
-const SIGMA = 0.87 * 0.87;
+const SIGMA: f32 = 0.87 * 0.87;
 
 fn high_precision(view_distance: f32) -> bool {
 #ifdef HIGH_PRECISION

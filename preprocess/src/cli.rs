@@ -12,29 +12,39 @@ const BAR_SIZE: u64 = 10000;
 #[derive(Parser, Debug)]
 #[command(name = "btpp", author, version, about)]
 pub struct Cli {
+    // could be optional and default to the current directory, but that would be
+    // risky in combination with overwrite
+    #[arg(required = true)]
+    pub terrain_path: PathBuf,
+    /// The GeoTIFFs to preprocess, or directories containing them.
+    // Variadic, so it has to come last: clap cannot tell where it starts unless every
+    // positional in front of it is required, which would make all the options below
+    // mandatory too.
     #[arg(required = true)]
     pub src_path: Vec<PathBuf>,
-    #[arg(required = true)]
-    // cloud be optional and use current directory, but this would be risky in combination with overwrite
-    pub terrain_path: PathBuf,
-    #[arg(default_value = None)]
-    pub temp_path: Option<PathBuf>,
 
     #[arg(short, long, default_value_t = false)]
     pub overwrite: bool,
-    #[arg(default_value = "source")]
+    /// Reuse a completed reprojection in the temp directory instead of redoing it.
+    #[arg(short, long, default_value_t = false)]
+    pub resume: bool,
+    /// Disk budget in GiB the run must fit into. Defaults to the free space on the target device.
+    #[arg(long, default_value = None)]
+    pub disk_budget: Option<u64>,
+    /// Where to reproject into. Defaults to a temp directory inside the attachment.
+    #[arg(long, default_value = None)]
+    pub temp_path: Option<PathBuf>,
+    #[arg(long, default_value = "source")]
     pub no_data: PreprocessNoData,
-    #[arg(default_value = "source")]
+    #[arg(long, default_value = "source")]
     pub data_type: PreprocessDataType,
-    #[arg(default_value_t = 16.0)]
+    #[arg(long, default_value_t = 16.0)]
     pub fill_radius: f32,
-    #[arg(default_value_t = false)]
+    #[arg(long, default_value_t = false)]
     pub create_mask: bool,
-
-    #[arg(default_value = None)]
+    #[arg(long, default_value = None)]
     pub lod_count: Option<u32>,
-
-    #[arg(default_value = "height")]
+    #[arg(long, default_value = "height")]
     pub attachment_label: AttachmentLabel,
     #[arg(short, long = "ts", default_value_t = 512)]
     pub texture_size: u32,
@@ -42,7 +52,7 @@ pub struct Cli {
     pub border_size: u32,
     #[arg(short, long = "m", default_value_t = 1)]
     pub mip_level_count: u32,
-    #[arg(default_value = "ru16")]
+    #[arg(long, default_value = "r16u")]
     pub format: AttachmentFormat,
 }
 
@@ -76,7 +86,7 @@ impl PreprocessBar<'_> {
         }
     }
 
-    pub(crate) fn callback(&self) -> &ProgressCallback {
+    pub(crate) fn callback(&self) -> &ProgressCallback<'_> {
         self.callback.as_ref()
     }
 

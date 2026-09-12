@@ -56,10 +56,11 @@ impl FromStr for AttachmentFormat {
     type Err = Error;
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         match s.trim() {
-            "rg8u" => Ok(Self::Rgb8U),
+            "rgb8u" => Ok(Self::Rgb8U),
             "rgba8u" => Ok(Self::Rgba8U),
             "r16u" => Ok(Self::R16U),
             "r16i" => Ok(Self::R16I),
+            "rg16u" => Ok(Self::Rg16U),
             "r32f" => Ok(Self::R32F),
             _ => Err(Error),
         }

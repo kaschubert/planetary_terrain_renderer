@@ -12,6 +12,7 @@ use bevy::{
         render_resource::{binding_types::*, *},
         renderer::{RenderContext, RenderDevice},
     },
+    shader::ShaderDefVal,
 };
 use strum::IntoEnumIterator;
 
@@ -65,21 +66,20 @@ pub struct MipPipelines {
     mip_shader: Handle<Shader>,
 }
 
-impl FromWorld for MipPipelines {
-    fn from_world(world: &mut World) -> Self {
-        let device = world.resource::<RenderDevice>();
-        let asset_server = world.resource::<AssetServer>();
+pub fn initialize_mip_pipelines(
+    mut commands: Commands,
+    device: Res<RenderDevice>,
+    asset_server: Res<AssetServer>,
+) {
+    let mip_layouts = AttachmentFormat::iter()
+        .map(|format| (format, create_mip_layout(&device, format)))
+        .collect();
+    let mip_shader = asset_server.load(MIP_SHADER);
 
-        let mip_layouts = AttachmentFormat::iter()
-            .map(|format| (format, create_mip_layout(device, format)))
-            .collect();
-        let mip_shader = asset_server.load(MIP_SHADER);
-
-        Self {
-            mip_layouts,
-            mip_shader,
-        }
-    }
+    commands.insert_resource(MipPipelines {
+        mip_layouts,
+        mip_shader,
+    });
 }
 
 impl SpecializedComputePipeline for MipPipelines {
@@ -92,7 +92,7 @@ impl SpecializedComputePipeline for MipPipelines {
             push_constant_ranges: default(),
             shader: self.mip_shader.clone(),
             shader_defs: key.shader_defs(),
-            entry_point: "main".into(),
+            entry_point: Some("main".into()),
             zero_initialize_workgroup_memory: false,
         }
     }
