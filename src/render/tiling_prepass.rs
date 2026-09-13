@@ -124,10 +124,10 @@ impl TilingPrepassItem {
 
 #[derive(Resource)]
 pub struct TerrainTilingPrepassPipelines {
-    pub(crate) terrain_layout: BindGroupLayout,
-    pub(crate) terrain_view_layout: BindGroupLayout,
-    pub(crate) indirect_layout: BindGroupLayout,
-    pub(crate) prepass_view_layout: BindGroupLayout,
+    pub(crate) terrain_layout: BindGroupLayoutDescriptor,
+    pub(crate) terrain_view_layout: BindGroupLayoutDescriptor,
+    pub(crate) indirect_layout: BindGroupLayoutDescriptor,
+    pub(crate) prepass_view_layout: BindGroupLayoutDescriptor,
     prepare_prepass_shader: Handle<Shader>,
     refine_tiles_shader: Handle<Shader>,
 }
@@ -137,10 +137,10 @@ pub fn initialize_terrain_tiling_prepass_pipelines(
     device: Res<RenderDevice>,
     asset_server: Res<AssetServer>,
 ) {
-    let terrain_layout = TerrainBindGroup::bind_group_layout(&device);
-    let terrain_view_layout = TerrainViewBindGroup::bind_group_layout(&device);
-    let indirect_layout = IndirectBindGroup::bind_group_layout(&device);
-    let prepass_view_layout = PrepassViewBindGroup::bind_group_layout(&device);
+    let terrain_layout = TerrainBindGroup::bind_group_layout_descriptor(&device);
+    let terrain_view_layout = TerrainViewBindGroup::bind_group_layout_descriptor(&device);
+    let indirect_layout = IndirectBindGroup::bind_group_layout_descriptor(&device);
+    let prepass_view_layout = PrepassViewBindGroup::bind_group_layout_descriptor(&device);
 
     let prepare_prepass_shader = asset_server.load(PREPARE_PREPASS_SHADER);
     let refine_tiles_shader = asset_server.load(REFINE_TILES_SHADER);

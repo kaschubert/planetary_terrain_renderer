@@ -185,19 +185,18 @@ pub fn prepare_terrain_depth_textures(
 
 #[derive(Resource)]
 pub struct DepthCopyPipeline {
-    layout: BindGroupLayout,
+    layout: BindGroupLayoutDescriptor,
     id: CachedRenderPipelineId,
 }
 
 pub fn initialize_depth_copy_pipeline(
     mut commands: Commands,
-    device: Res<RenderDevice>,
     pipeline_cache: Res<PipelineCache>,
     fullscreen_shader: Res<FullscreenShader>,
     asset_server: Res<AssetServer>,
 ) {
-    let layout = device.create_bind_group_layout(
-        None,
+    let layout = BindGroupLayoutDescriptor::new(
+        "depth_copy_layout",
         &BindGroupLayoutEntries::sequential(
             ShaderStages::FRAGMENT,
             (texture_depth_2d_multisampled(),),
@@ -289,7 +288,7 @@ impl ViewNode for TerrainPass {
         });
         let depth_copy_bind_group = device.create_bind_group(
             None,
-            &depth_copy_pipeline.layout,
+            &pipeline_cache.get_bind_group_layout(&depth_copy_pipeline.layout),
             &BindGroupEntries::single(&terrain_depth_view),
         );
 
