@@ -93,14 +93,14 @@ impl SpecializedComputePipeline for MipPipelines {
 /// Generates the mip levels of all atlas tiles uploaded this frame, before any camera renders.
 pub(crate) fn mip_prepass(
     pipeline_cache: Res<PipelineCache>,
-    gpu_tile_atlases: Res<TerrainComponents<GpuTileAtlas>>,
+    mut gpu_tile_atlases: ResMut<TerrainComponents<GpuTileAtlas>>,
     mut ctx: RenderContext,
 ) {
     let mut pass = ctx
         .command_encoder()
         .begin_compute_pass(&ComputePassDescriptor::default());
 
-    for gpu_tile_atlas in gpu_tile_atlases.values() {
+    for gpu_tile_atlas in gpu_tile_atlases.values_mut() {
         gpu_tile_atlas.generate_mip(&mut pass, &pipeline_cache);
     }
 }
