@@ -100,10 +100,6 @@ struct TerrainStreaming {
     gradient: Handle<Image>,
     /// The spawned entity per entry of STREAMED_TERRAINS.
     active: Vec<Option<Entity>>,
-    /// The entry whose spawn has been requested but whose entity is not known yet.
-    /// spawn_terrain does not return one, so it is claimed from Added<TileAtlas>, which
-    /// only works while at most one spawn is in flight.
-    pending: Option<usize>,
 }
 
 /// Converts longitude and latitude to a position on the spheroid. Matches the unit sphere
@@ -210,7 +206,6 @@ fn initialize(
         view,
         gradient: gradient1.clone(),
         active: vec![None; STREAMED_TERRAINS.len()],
-        pending: None,
     });
 }
 
@@ -220,18 +215,8 @@ fn stream_terrains(
     mut streaming: ResMut<TerrainStreaming>,
     grids: Grids,
     camera: Query<(Entity, &Transform, &CellCoord), With<OrbitalCameraController>>,
-    spawned: Query<Entity, Added<TileAtlas>>,
     asset_server: Res<AssetServer>,
 ) {
-    // spawn_terrain hands back no entity, so the one that turned up this frame belongs to
-    // whichever spawn is in flight. Only one is ever in flight, so there is no ambiguity.
-    if let Some(index) = streaming.pending
-        && let Some(terrain) = spawned.iter().next()
-    {
-        streaming.active[index] = Some(terrain);
-        streaming.pending = None;
-    }
-
     let Ok((camera, camera_transform, camera_cell)) = camera.single() else {
         return;
     };
@@ -262,9 +247,8 @@ fn stream_terrains(
         };
 
         match (wanted, streaming.active[index]) {
-            // One spawn at a time, so the entity it produces can be identified above.
-            (true, None) if streaming.pending.is_none() => {
-                commands.spawn_terrain(
+            (true, None) => {
+                let terrain = commands.spawn_terrain(
                     asset_server.load(terrain.path),
                     TerrainViewConfig {
                         order: terrain.order,
@@ -279,7 +263,7 @@ fn stream_terrains(
                     streaming.view,
                 );
 
-                streaming.pending = Some(index);
+                streaming.active[index] = Some(terrain);
             }
             (false, Some(entity)) => {
                 // TileTree::despawn and GpuTileAtlas::despawn drop the data that hangs off
