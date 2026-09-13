@@ -39,6 +39,9 @@ struct TileState {
     atlas_index: u32,
     /// The count of [`TileTrees`] that have requested this tile.
     requests: u32,
+    /// Distinguishes this allocation of the coordinate from earlier ones whose loads may
+    /// still be in flight.
+    generation: u32,
 }
 
 // Todo: rename to terrain?
@@ -63,6 +66,8 @@ pub struct TileAtlas {
     pub(crate) attachments: HashMap<AttachmentLabel, Attachment>, // stores the attachment data
     tile_states: HashMap<TileCoordinate, TileState>,
     unused_indices: VecDeque<u32>,
+    /// Bumped on every slot allocation, see request_tile.
+    generation: u32,
     existing_tiles: HashSet<TileCoordinate>,
     pub(crate) uploading_tiles: Vec<AttachmentTileWithData>,
     pub(crate) downloading_tiles: Vec<Task<AttachmentTileWithData>>,
@@ -99,6 +104,7 @@ impl TileAtlas {
             attachments,
             tile_states: default(),
             unused_indices: (0..settings.atlas_size).collect(),
+            generation: 0,
             existing_tiles: HashSet::from_iter(config.tiles.clone()),
             to_load: default(),
             uploading_tiles: default(),
@@ -142,23 +148,31 @@ impl TileAtlas {
     }
 
     pub(crate) fn tile_loaded(&mut self, tile: AttachmentTile, data: AttachmentData) {
-        if let Some(tile_state) = self.tile_states.get_mut(&tile.coordinate) {
-            tile_state.state = match tile_state.state {
-                LoadingState::Loading(1) => LoadingState::Loaded,
-                LoadingState::Loading(n) => LoadingState::Loading(n - 1),
-                LoadingState::Loaded => {
-                    panic!("Loaded more attachments, than registered with the tile atlas.")
-                }
-            };
+        // A load is stale if its coordinate was evicted while it was in flight, whether
+        // or not the coordinate has since been requested again: a new request is a new
+        // generation, and counting an old load against it would overflow its attachment
+        // count and upload data into whatever slot the coordinate holds now.
+        let Some(tile_state) = self
+            .tile_states
+            .get_mut(&tile.coordinate)
+            .filter(|tile_state| tile_state.generation == tile.generation)
+        else {
+            return;
+        };
 
-            self.uploading_tiles.push(AttachmentTileWithData {
-                atlas_index: tile_state.atlas_index,
-                label: tile.label,
-                data,
-            });
-        } else {
-            dbg!("Tile is no longer loaded.");
-        }
+        tile_state.state = match tile_state.state {
+            LoadingState::Loading(1) => LoadingState::Loaded,
+            LoadingState::Loading(n) => LoadingState::Loading(n - 1),
+            LoadingState::Loaded => {
+                panic!("Loaded more attachments, than registered with the tile atlas.")
+            }
+        };
+
+        self.uploading_tiles.push(AttachmentTileWithData {
+            atlas_index: tile_state.atlas_index,
+            label: tile.label,
+            data,
+        });
     }
 
     /// Updates the tile atlas according to all corresponding tile_trees.
@@ -204,13 +218,22 @@ impl TileAtlas {
 
             tile.requests += 1;
         } else {
-            let atlas_index = self
-                .unused_indices
-                .pop_front()
-                .expect("Atlas out of indices");
+            // With every slot held by a tile in use, this one is left unloaded rather
+            // than evicting one that is: the tile tree shows the finest loaded parent
+            // instead, so the picture degrades where the process used to panic. The
+            // tree asks again the next time it releases and re-requests the tile.
+            let Some(atlas_index) = self.unused_indices.pop_front() else {
+                warn_once!("atlas full, skipping tiles: consider a larger atlas_size");
+                return;
+            };
 
             self.tile_states
                 .retain(|_, tile| tile.atlas_index != atlas_index); // remove tile if it is still cached
+
+            // Loads for an earlier occupant of this coordinate may still be in flight;
+            // the generation is what lets tile_loaded tell them apart from these.
+            self.generation += 1;
+            let generation = self.generation;
 
             self.tile_states.insert(
                 tile_coordinate,
@@ -218,6 +241,7 @@ impl TileAtlas {
                     requests: 1,
                     state: LoadingState::Loading(self.attachments.len() as u32),
                     atlas_index,
+                    generation,
                 },
             );
 
@@ -225,6 +249,7 @@ impl TileAtlas {
                 self.to_load.push(AttachmentTile {
                     coordinate: tile_coordinate,
                     label: label.clone(),
+                    generation,
                 });
             }
         }
@@ -235,7 +260,10 @@ impl TileAtlas {
             return;
         }
 
-        let tile = self.tile_states.get_mut(&tile_coordinate).unwrap();
+        // Absent if the atlas was full when it was requested, see request_tile.
+        let Some(tile) = self.tile_states.get_mut(&tile_coordinate) else {
+            return;
+        };
         tile.requests -= 1;
 
         if tile.requests == 0 {
