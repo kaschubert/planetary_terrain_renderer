@@ -66,6 +66,8 @@ pub struct TileAtlas {
     pub(crate) attachments: HashMap<AttachmentLabel, Attachment>, // stores the attachment data
     tile_states: HashMap<TileCoordinate, TileState>,
     unused_indices: VecDeque<u32>,
+    /// The slot count the atlas was created with, kept so usage can be reported.
+    atlas_size: u32,
     /// Bumped on every slot allocation, see request_tile.
     generation: u32,
     existing_tiles: HashSet<TileCoordinate>,
@@ -104,6 +106,7 @@ impl TileAtlas {
             attachments,
             tile_states: default(),
             unused_indices: (0..settings.atlas_size).collect(),
+            atlas_size: settings.atlas_size,
             generation: 0,
             existing_tiles: HashSet::from_iter(config.tiles.clone()),
             to_load: default(),
@@ -116,6 +119,18 @@ impl TileAtlas {
             shape: config.shape,
             terrain_buffer,
         }
+    }
+
+    /// The atlas slots currently held by tiles, and the total the atlas was built with.
+    ///
+    /// Slots are what bound how much of a terrain can be resident at once, and they are
+    /// what runs out before memory does, so this is the number to watch when deciding
+    /// whether the atlas could be smaller.
+    pub fn slot_usage(&self) -> (u32, u32) {
+        (
+            self.atlas_size - self.unused_indices.len() as u32,
+            self.atlas_size,
+        )
     }
 
     pub(crate) fn get_best_tile(&self, tile_coordinate: TileCoordinate) -> TileTreeEntry {

@@ -140,15 +140,16 @@ fn main() {
             TerrainPickingPlugin,
         ))
         // A terrain costs roughly 2.6 MiB per atlas slot, for height and albedo together,
-        // so the default atlas size is about 2.6 GiB each. Four at once does not fit a
-        // 12 GiB card, which is what stream_terrains is for: the two cities are 500 km
-        // apart and never resident together, so the most that is ever live is the globe,
-        // the country and one city.
-        //
-        // The atlas cannot be shrunk much instead of this: the tile tree asks for
-        // lod_count x tree_size squared tiles per terrain, and the city terrains are 16
-        // lods deep, so halving it runs the atlas out of indices.
-        .insert_resource(TerrainSettings::new(vec!["albedo"]))
+        // and the atlas is allocated whole however few slots are in use. With loading
+        // culled to the view frustum the three resident terrains hold about 300 slots
+        // between them, against 3084 at the default size, so 256 each leaves better than
+        // twice that in hand for the burst a fast turn requests before released slots
+        // cycle back. Running out no longer panics either: the finest tiles just go
+        // missing until the tree re-requests them, with a warning in the log.
+        .insert_resource(TerrainSettings {
+            atlas_size: 256,
+            ..TerrainSettings::new(vec!["albedo"])
+        })
         // .insert_resource(ClearColor(Color::WHITE))
         .add_systems(Startup, initialize)
         .add_systems(Update, stream_terrains)
@@ -170,6 +171,9 @@ struct VramUsage {
 #[derive(Component)]
 struct VramText;
 
+#[derive(Component)]
+struct CopyButton;
+
 struct VramUsagePlugin;
 
 impl Plugin for VramUsagePlugin {
@@ -178,7 +182,14 @@ impl Plugin for VramUsagePlugin {
 
         app.insert_resource(usage.clone())
             .add_systems(Startup, spawn_vram_text)
-            .add_systems(Update, (update_vram_text, offset_fps_overlay));
+            .add_systems(
+                Update,
+                (
+                    update_vram_text,
+                    offset_fps_overlay,
+                    copy_stats_to_clipboard,
+                ),
+            );
 
         // The allocator lives in the render world, so the counters are shared across the
         // two rather than extracted: extraction only runs main to render.
@@ -204,6 +215,27 @@ fn sample_vram(device: Res<RenderDevice>, usage: Res<VramUsage>) {
 }
 
 fn spawn_vram_text(mut commands: Commands) {
+    commands
+        .spawn((
+            CopyButton,
+            Button,
+            Node {
+                position_type: PositionType::Absolute,
+                top: Val::Px(6.0),
+                left: Val::Px(420.0),
+                padding: UiRect::axes(Val::Px(6.0), Val::Px(2.0)),
+                ..default()
+            },
+            BackgroundColor(Color::srgba(0.0, 0.0, 0.0, 0.5)),
+        ))
+        .with_child((
+            Text::new("copy"),
+            TextFont {
+                font_size: FontSize::Px(14.0),
+                ..default()
+            },
+        ));
+
     commands.spawn((
         VramText,
         Text::default(),
@@ -220,6 +252,34 @@ fn spawn_vram_text(mut commands: Commands) {
     ));
 }
 
+/// Puts the overlay text on the clipboard, so the numbers can be pasted somewhere.
+///
+/// On X11 whoever sets the clipboard has to keep serving it until another application
+/// claims it, which is what wait() does - hence the thread, since it blocks.
+fn copy_stats_to_clipboard(
+    button: Query<&Interaction, (Changed<Interaction>, With<CopyButton>)>,
+    text: Single<&Text, With<VramText>>,
+) {
+    use arboard::SetExtLinux;
+
+    for interaction in &button {
+        if *interaction != Interaction::Pressed {
+            continue;
+        }
+
+        let stats = text.0.clone();
+
+        std::thread::spawn(move || {
+            match arboard::Clipboard::new() {
+                Ok(mut clipboard) => {
+                    let _ = clipboard.set().wait().text(stats);
+                }
+                Err(error) => error!("could not reach the clipboard: {error}"),
+            };
+        });
+    }
+}
+
 /// Moves the fps overlay down so the vram line can have the top left corner.
 ///
 /// The overlay spawns at the origin and exposes no position setting, but its root is the
@@ -227,19 +287,34 @@ fn spawn_vram_text(mut commands: Commands) {
 fn offset_fps_overlay(mut overlay: Query<(&mut Node, &GlobalZIndex), Added<GlobalZIndex>>) {
     for (mut node, z_index) in &mut overlay {
         if z_index.0 == FPS_OVERLAY_ZINDEX {
-            node.top = Val::Px(30.0);
+            node.top = Val::Px(52.0);
             node.left = Val::Px(6.0);
         }
     }
 }
 
-fn update_vram_text(usage: Res<VramUsage>, mut text: Single<&mut Text, With<VramText>>) {
+fn update_vram_text(
+    usage: Res<VramUsage>,
+    atlases: Query<&TileAtlas>,
+    mut text: Single<&mut Text, With<VramText>>,
+) {
     const GIB: f64 = (1u64 << 30) as f64;
 
     let allocated = usage.allocated.load(Ordering::Relaxed) as f64 / GIB;
     let reserved = usage.reserved.load(Ordering::Relaxed) as f64 / GIB;
 
-    text.0 = format!("VRAM used / alloc {allocated:.2} / {reserved:.2} GiB");
+    // Slots run out before memory does, and unlike the figures above they respond to
+    // frustum culling: the atlas texture is allocated whole, however little of it is used.
+    let (used_slots, total_slots) = atlases
+        .iter()
+        .map(TileAtlas::slot_usage)
+        .fold((0, 0), |(used, total), (u, t)| (used + u, total + t));
+
+    text.0 = format!(
+        "VRAM used / alloc {allocated:.2} / {reserved:.2} GiB\n\
+         atlas slots {used_slots} / {total_slots} ({} terrains)",
+        atlases.iter().len()
+    );
 }
 
 #[allow(clippy::too_many_arguments)]

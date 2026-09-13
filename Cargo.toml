@@ -50,6 +50,8 @@ wgpu-core = { version = "29", optional = true } # keep in sync with bevy's wgpu
 # Only the examples need this, for the fps overlay, so it is not forced on users of the
 # library. Cargo unifies the feature into the bevy above when building examples.
 bevy = { version = "0.19.1", features = ["bevy_dev_tools"] }
+# For the overlay's copy button.
+arboard = "3.6"
 
 [[example]]
 name = "spherical"
