@@ -1,6 +1,6 @@
 //! Types for configuring terrain views.
 
-use bevy::{platform::collections::HashMap, prelude::*};
+use bevy::{math::DVec3, platform::collections::HashMap, prelude::*};
 
 /// Resource that stores components that are associated to a terrain entity and a view entity.
 #[derive(Deref, DerefMut, Resource)]
@@ -63,4 +63,21 @@ impl Default for TerrainViewConfig {
             order: 0,
         }
     }
+}
+
+/// The pose the terrain is loaded, refined and culled for.
+///
+/// Normally that is the rendering camera's own, and this is None. While it is set, the
+/// tile trees keep working for this pose instead, so the camera can be flown somewhere
+/// else to look at what that pose costs - which tiles it holds, where its frustum cuts -
+/// from outside. The debug plugin sets it while Ctrl is held.
+#[derive(Resource, Default)]
+pub struct CullingCamera(pub Option<CullingPose>);
+
+#[derive(Clone, Copy, Debug)]
+pub struct CullingPose {
+    /// Absolute, not render space: the floating origin follows the rendering camera, so a
+    /// render space position would silently move with it.
+    pub position: DVec3,
+    pub rotation: Quat,
 }

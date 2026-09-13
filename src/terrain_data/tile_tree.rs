@@ -3,7 +3,7 @@ use crate::{
     render::{TerrainViewUniform, TileTreeUniform},
     terrain::TerrainConfig,
     terrain_data::{INVALID_ATLAS_INDEX, INVALID_LOD, TileAtlas},
-    terrain_view::{TerrainViewComponents, TerrainViewConfig},
+    terrain_view::{CullingCamera, TerrainViewComponents, TerrainViewConfig},
 };
 use bevy::{
     asset::RenderAssetUsages,
@@ -375,6 +375,7 @@ impl TileTree {
         mut tile_trees: ResMut<TerrainViewComponents<TileTree>>,
         grids: Grids,
         views: Query<(&Transform, &CellCoord)>,
+        culling_camera: Res<CullingCamera>,
     ) {
         for (&(_, view), tile_tree) in tile_trees.iter_mut() {
             let camera = camera.get(view).unwrap();
@@ -383,16 +384,35 @@ impl TileTree {
 
             // Todo: transform should be global transform?
 
+            let camera_local_position = grid.grid_position_double(cell, transform);
+
+            // Normally the pose is the camera's own. A detached culling camera keeps an
+            // absolute pose and is re-expressed in render space every frame: the floating
+            // origin follows the rendering camera, so the same absolute point lands on a
+            // different render space position each time the camera crosses a cell.
+            let (view_local_position, view_transform) = match culling_camera.0 {
+                None => (camera_local_position, *transform),
+                Some(pose) => (
+                    pose.position,
+                    Transform {
+                        translation: (pose.position - camera_local_position).as_vec3()
+                            + transform.translation,
+                        rotation: pose.rotation,
+                        scale: Vec3::ONE,
+                    },
+                ),
+            };
+
             let clip_from_view = camera.clip_from_view();
-            let world_from_view = transform.to_matrix();
+            let world_from_view = view_transform.to_matrix();
             let clip_from_world = clip_from_view * world_from_view.inverse();
 
             let half_spaces = ViewFrustum::from_clip_from_world(&clip_from_world)
                 .half_spaces
                 .map(|space| space.normal_d());
 
-            tile_tree.view_local_position = grid.grid_position_double(cell, transform);
-            tile_tree.view_world_position = transform.translation;
+            tile_tree.view_local_position = view_local_position;
+            tile_tree.view_world_position = view_transform.translation;
             tile_tree.half_spaces = half_spaces;
             tile_tree.update();
         }

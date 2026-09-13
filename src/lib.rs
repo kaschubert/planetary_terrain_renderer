@@ -76,7 +76,7 @@ pub mod prelude {
         terrain_data::{
             AttachmentConfig, AttachmentFormat, AttachmentLabel, GpuTileAtlas, TileAtlas, TileTree,
         },
-        terrain_view::{TerrainViewComponents, TerrainViewConfig},
+        terrain_view::{CullingCamera, CullingPose, TerrainViewComponents, TerrainViewConfig},
     };
     pub use big_space::{commands::BigSpaceCommands, grid::Grid};
 }

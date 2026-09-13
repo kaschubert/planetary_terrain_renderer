@@ -3,7 +3,7 @@
 use crate::{
     debug::{debug_camera_controller, debug_surface_approximation, orbital_camera_controller},
     terrain_data::{TileAtlas, TileTree},
-    terrain_view::TerrainViewComponents,
+    terrain_view::{CullingCamera, CullingPose, TerrainViewComponents},
 };
 
 use bevy::{
@@ -11,6 +11,7 @@ use bevy::{
     render::{Extract, RenderApp, render_resource::*},
     window::{CursorOptions, PrimaryWindow},
 };
+use big_space::prelude::{CellCoord, Grids};
 
 mod approximation_debug;
 mod camera;
@@ -46,6 +47,7 @@ impl Plugin for TerrainDebugPlugin {
                     finish_loading_images,
                     orbital_camera_controller,
                     debug_camera_controller,
+                    detach_culling_camera,
                 ),
             )
             .add_systems(
@@ -229,6 +231,42 @@ pub fn toggle_debug(input: Res<ButtonInput<KeyCode>>, mut debug: ResMut<DebugTer
             "Toggled the debug flag 3 {}.",
             if debug.test3 { "on" } else { "off" }
         )
+    }
+}
+
+/// Detaches the culling camera from the rendering camera while Ctrl is held.
+///
+/// The terrain keeps loading, refining and culling for the pose the camera had when Ctrl
+/// went down, and the camera itself can be flown away to look at that footprint from
+/// outside. Letting go reattaches it to wherever the camera is by then.
+pub fn detach_culling_camera(
+    input: Res<ButtonInput<KeyCode>>,
+    mut culling_camera: ResMut<CullingCamera>,
+    grids: Grids,
+    camera: Query<(Entity, &Transform, &CellCoord), With<Camera3d>>,
+) {
+    let held = input.pressed(KeyCode::ControlLeft) || input.pressed(KeyCode::ControlRight);
+
+    match (held, culling_camera.0.is_some()) {
+        (true, false) => {
+            let Ok((entity, transform, cell)) = camera.single() else {
+                return;
+            };
+            let Some(grid) = grids.parent_grid(entity) else {
+                return;
+            };
+
+            culling_camera.0 = Some(CullingPose {
+                position: grid.grid_position_double(cell, transform),
+                rotation: transform.rotation,
+            });
+            println!("Detached the culling camera: the terrain keeps loading for this pose.");
+        }
+        (false, true) => {
+            culling_camera.0 = None;
+            println!("Reattached the culling camera.");
+        }
+        _ => {}
     }
 }
 

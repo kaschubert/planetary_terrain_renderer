@@ -12,7 +12,7 @@ use crate::{
     terrain_data::{
         AttachmentLabel, GpuTileAtlas, TileAtlas, TileTree, finish_loading, start_loading,
     },
-    terrain_view::TerrainViewComponents,
+    terrain_view::{CullingCamera, TerrainViewComponents},
 };
 use bevy::{
     core_pipeline::{Core3d, Core3dSystems, core_3d::main_opaque_pass_3d, schedule::camera_driver},
@@ -69,6 +69,7 @@ impl Plugin for TerrainPlugin {
             .init_asset::<TerrainConfig>()
             .init_resource::<InternalShaders>()
             .init_resource::<TerrainViewComponents<TileTree>>()
+            .init_resource::<CullingCamera>()
             .init_resource::<TerrainSettings>()
             .init_asset_loader::<TiffLoader>()
             .add_systems(
