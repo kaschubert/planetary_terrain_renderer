@@ -174,6 +174,10 @@ struct VramText;
 #[derive(Component)]
 struct CopyButton;
 
+/// The "Copied!" note next to the button, gone again once the timer runs out.
+#[derive(Component)]
+struct CopiedToast(Timer);
+
 struct VramUsagePlugin;
 
 impl Plugin for VramUsagePlugin {
@@ -188,6 +192,8 @@ impl Plugin for VramUsagePlugin {
                     update_vram_text,
                     offset_fps_overlay,
                     copy_stats_to_clipboard,
+                    highlight_copy_button,
+                    expire_copied_toast,
                 ),
             );
 
@@ -257,14 +263,37 @@ fn spawn_vram_text(mut commands: Commands) {
 /// On X11 whoever sets the clipboard has to keep serving it until another application
 /// claims it, which is what wait() does - hence the thread, since it blocks.
 fn copy_stats_to_clipboard(
+    mut commands: Commands,
     button: Query<&Interaction, (Changed<Interaction>, With<CopyButton>)>,
     text: Single<&Text, With<VramText>>,
+    mut toast: Query<&mut CopiedToast>,
 ) {
     use arboard::SetExtLinux;
 
     for interaction in &button {
         if *interaction != Interaction::Pressed {
             continue;
+        }
+
+        // One toast at a time: a second press while it is showing just restarts the clock.
+        if let Ok(mut toast) = toast.single_mut() {
+            toast.0.reset();
+        } else {
+            commands.spawn((
+                CopiedToast(Timer::from_seconds(3.0, TimerMode::Once)),
+                Text::new("Copied!"),
+                TextFont {
+                    font_size: FontSize::Px(14.0),
+                    ..default()
+                },
+                Node {
+                    position_type: PositionType::Absolute,
+                    top: Val::Px(8.0),
+                    // Just right of the button.
+                    left: Val::Px(476.0),
+                    ..default()
+                },
+            ));
         }
 
         let stats = text.0.clone();
@@ -277,6 +306,34 @@ fn copy_stats_to_clipboard(
                 Err(error) => error!("could not reach the clipboard: {error}"),
             };
         });
+    }
+}
+
+fn expire_copied_toast(
+    mut commands: Commands,
+    time: Res<Time>,
+    mut toasts: Query<(Entity, &mut CopiedToast)>,
+) {
+    for (entity, mut toast) in &mut toasts {
+        if toast.0.tick(time.delta()).is_finished() {
+            commands.entity(entity).despawn();
+        }
+    }
+}
+
+/// Gives the copy button a hover and a press state, so it reads as a button.
+fn highlight_copy_button(
+    mut button: Query<
+        (&Interaction, &mut BackgroundColor),
+        (Changed<Interaction>, With<CopyButton>),
+    >,
+) {
+    for (interaction, mut background) in &mut button {
+        background.0 = match interaction {
+            Interaction::None => Color::srgba(0.0, 0.0, 0.0, 0.5),
+            Interaction::Hovered => Color::srgba(0.35, 0.35, 0.35, 0.8),
+            Interaction::Pressed => Color::srgba(0.6, 0.6, 0.6, 0.9),
+        };
     }
 }
 
