@@ -1,4 +1,5 @@
 use bevy::math::DVec3;
+use bevy::dev_tools::fps_overlay::FpsOverlayPlugin;
 use bevy::window::WindowResolution;
 use bevy::{prelude::*, reflect::TypePath, render::render_resource::*, shader::ShaderRef};
 use bevy_terrain::math::Coordinate;
@@ -130,6 +131,7 @@ fn main() {
             TerrainPlugin,
             TerrainMaterialPlugin::<CustomMaterial>::default(),
             TerrainDebugPlugin, // enable debug settings and controls
+            FpsOverlayPlugin::default(), // frame rate and frame time graph, top left
             TerrainPickingPlugin,
         ))
         // A terrain costs roughly 2.6 MiB per atlas slot, for height and albedo together,

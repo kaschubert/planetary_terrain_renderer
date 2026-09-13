@@ -46,6 +46,11 @@ objc2-foundation = { version = "0.3", optional = true, features = ["NSString", "
 objc2-metal = { version = "0.3", optional = true, features = ["MTLCaptureManager"] } # keep in sync with bevy's wgpu
 wgpu-core = { version = "29", optional = true } # keep in sync with bevy's wgpu
 
+[dev-dependencies]
+# Only the examples need this, for the fps overlay, so it is not forced on users of the
+# library. Cargo unifies the feature into the bevy above when building examples.
+bevy = { version = "0.19.1", features = ["bevy_dev_tools"] }
+
 [[example]]
 name = "spherical"
 path = "examples/spherical.rs"
