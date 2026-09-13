@@ -1,10 +1,14 @@
+use bevy::dev_tools::fps_overlay::{FPS_OVERLAY_ZINDEX, FpsOverlayPlugin};
 use bevy::math::DVec3;
-use bevy::dev_tools::fps_overlay::FpsOverlayPlugin;
+use bevy::render::{Render, RenderApp, RenderSystems, renderer::RenderDevice};
+use bevy::text::FontSize;
 use bevy::window::WindowResolution;
 use bevy::{prelude::*, reflect::TypePath, render::render_resource::*, shader::ShaderRef};
 use bevy_terrain::math::Coordinate;
 use bevy_terrain::prelude::*;
 use big_space::prelude::{CellCoord, Grids};
+use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
 
 const RADIUS: f64 = 6371000.0;
 
@@ -130,8 +134,9 @@ fn main() {
                 .disable::<TransformPlugin>(),
             TerrainPlugin,
             TerrainMaterialPlugin::<CustomMaterial>::default(),
-            TerrainDebugPlugin, // enable debug settings and controls
+            TerrainDebugPlugin,          // enable debug settings and controls
             FpsOverlayPlugin::default(), // frame rate and frame time graph, top left
+            VramUsagePlugin,             // gpu allocator usage, below the fps overlay
             TerrainPickingPlugin,
         ))
         // A terrain costs roughly 2.6 MiB per atlas slot, for height and albedo together,
@@ -148,6 +153,93 @@ fn main() {
         .add_systems(Startup, initialize)
         .add_systems(Update, stream_terrains)
         .run();
+}
+
+/// Reports how much gpu memory wgpu's allocator is holding.
+///
+/// This is what the allocator has handed out and what it has reserved from the driver, not
+/// the size of the card: wgpu exposes no portable way to ask for total or free video
+/// memory. It is still the number that moves when a terrain streams in or out, since a
+/// terrain's atlas textures dwarf everything else in this example.
+#[derive(Resource, Clone, Default)]
+struct VramUsage {
+    allocated: Arc<AtomicU64>,
+    reserved: Arc<AtomicU64>,
+}
+
+#[derive(Component)]
+struct VramText;
+
+struct VramUsagePlugin;
+
+impl Plugin for VramUsagePlugin {
+    fn build(&self, app: &mut App) {
+        let usage = VramUsage::default();
+
+        app.insert_resource(usage.clone())
+            .add_systems(Startup, spawn_vram_text)
+            .add_systems(Update, (update_vram_text, offset_fps_overlay));
+
+        // The allocator lives in the render world, so the counters are shared across the
+        // two rather than extracted: extraction only runs main to render.
+        if let Some(render_app) = app.get_sub_app_mut(RenderApp) {
+            render_app
+                .insert_resource(usage)
+                .add_systems(Render, sample_vram.in_set(RenderSystems::Cleanup));
+        }
+    }
+}
+
+fn sample_vram(device: Res<RenderDevice>, usage: Res<VramUsage>) {
+    let Some(report) = device.wgpu_device().generate_allocator_report() else {
+        return;
+    };
+
+    usage
+        .allocated
+        .store(report.total_allocated_bytes, Ordering::Relaxed);
+    usage
+        .reserved
+        .store(report.total_reserved_bytes, Ordering::Relaxed);
+}
+
+fn spawn_vram_text(mut commands: Commands) {
+    commands.spawn((
+        VramText,
+        Text::default(),
+        TextFont {
+            font_size: FontSize::Px(16.0),
+            ..default()
+        },
+        Node {
+            position_type: PositionType::Absolute,
+            top: Val::Px(6.0),
+            left: Val::Px(6.0),
+            ..default()
+        },
+    ));
+}
+
+/// Moves the fps overlay down so the vram line can have the top left corner.
+///
+/// The overlay spawns at the origin and exposes no position setting, but its root is the
+/// node carrying FPS_OVERLAY_ZINDEX, which is public.
+fn offset_fps_overlay(mut overlay: Query<(&mut Node, &GlobalZIndex), Added<GlobalZIndex>>) {
+    for (mut node, z_index) in &mut overlay {
+        if z_index.0 == FPS_OVERLAY_ZINDEX {
+            node.top = Val::Px(30.0);
+            node.left = Val::Px(6.0);
+        }
+    }
+}
+
+fn update_vram_text(usage: Res<VramUsage>, mut text: Single<&mut Text, With<VramText>>) {
+    const GIB: f64 = (1u64 << 30) as f64;
+
+    let allocated = usage.allocated.load(Ordering::Relaxed) as f64 / GIB;
+    let reserved = usage.reserved.load(Ordering::Relaxed) as f64 / GIB;
+
+    text.0 = format!("VRAM used / alloc {allocated:.2} / {reserved:.2} GiB");
 }
 
 #[allow(clippy::too_many_arguments)]
