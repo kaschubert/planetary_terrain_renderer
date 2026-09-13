@@ -16,7 +16,7 @@ members = ["preprocess"]
 
 [features]
 rand = ["dep:rand"]
-metal_capture = ["dep:metal", "dep:wgpu-core"]
+metal_capture = ["dep:objc2", "dep:objc2-foundation", "dep:objc2-metal", "dep:wgpu-core"]
 
 [lints.rust]
 # The AsBindGroup derive expands to cfg(feature = "webgpu"), which is a feature of
@@ -24,14 +24,15 @@ metal_capture = ["dep:metal", "dep:wgpu-core"]
 unexpected_cfgs = { level = "warn", check-cfg = ['cfg(feature, values("webgpu"))'] }
 
 [dependencies]
-bevy = "0.18.1"
-bevy_common_assets = { version = "0.16.0", features = ["ron"] }
-big_space = { version = "0.12", features = ["i32"] }
+bevy = "0.19.1"
+bevy_common_assets = { version = "0.17.0", features = ["ron"] }
+big_space = { git = "https://github.com/aevyrie/big_space", rev = "5f255228e9b4", features = ["i32"] } # bevy-0.19 branch, unreleased
 tiff = "0.10"
 bytemuck = "1.14"
 ndarray = "0.16.1"
 itertools = "0.14.0"
 bitflags = "2.4"
+indexmap = "2"
 serde = "1.0.210"
 ron = "0.12"
 async-channel = "2.1"
@@ -40,8 +41,10 @@ strum = "0.27.1"
 strum_macros = "0.27.1"
 
 rand = { version = "0.9.0", optional = true }
-metal = { version = "0.32.0", optional = true } # keep in sync with bevy's wgpu
-wgpu-core = { version = "27", optional = true } # keep in sync with bevy's wgpu
+objc2 = { version = "0.6", optional = true }
+objc2-foundation = { version = "0.3", optional = true, features = ["NSString", "NSURL"] }
+objc2-metal = { version = "0.3", optional = true, features = ["MTLCaptureManager"] } # keep in sync with bevy's wgpu
+wgpu-core = { version = "29", optional = true } # keep in sync with bevy's wgpu
 
 [[example]]
 name = "spherical"

@@ -5,6 +5,9 @@ use bevy::{
         extract_resource::ExtractResourcePlugin, renderer::RenderDevice,
     },
 };
+use objc2::runtime::AnyObject;
+use objc2_foundation::{NSString, NSURL};
+use objc2_metal::{MTLCaptureDescriptor, MTLCaptureDestination, MTLCaptureManager};
 use std::{env::current_dir, time::SystemTime};
 
 pub struct MetalCapturePlugin;
@@ -37,27 +40,34 @@ pub fn start_capture(capture: Res<FrameCapture>, device: Res<RenderDevice>) {
 
     println!("Capturing frame");
 
-    let capture = metal::CaptureDescriptor::new();
-    capture.set_destination(metal::MTLCaptureDestination::GpuTraceDocument);
-    capture.set_output_url(current_dir().unwrap().join("captures").join(format!(
-            "capture_{}.gputrace",
-            SystemTime::now().duration_since(SystemTime::UNIX_EPOCH)
-                .unwrap()
-                .as_secs()
-        )));
+    let output_path = current_dir().unwrap().join("captures").join(format!(
+        "capture_{}.gputrace",
+        SystemTime::now()
+            .duration_since(SystemTime::UNIX_EPOCH)
+            .unwrap()
+            .as_secs()
+    ));
+
+    let descriptor = MTLCaptureDescriptor::new();
+    descriptor.setDestination(MTLCaptureDestination::GPUTraceDocument);
+    descriptor.setOutputURL(Some(&NSURL::fileURLWithPath(&NSString::from_str(
+        output_path.to_str().unwrap(),
+    ))));
+
     unsafe {
         if let Some(device) = device.wgpu_device().as_hal::<wgpu_core::api::Metal>() {
-            capture.set_capture_device(&device.raw_device().lock());
+            let raw_device: &AnyObject = AsRef::as_ref(&**device.raw_device());
+            descriptor.setCaptureObject(Some(raw_device));
         }
-    };
+    }
 
-    metal::CaptureManager::shared()
-        .start_capture(&capture)
-        .or_else(|_| {
-            println!("Failed to start capture");
-            Ok::<(), String>(())
-        })
-        .unwrap();
+    let manager = unsafe { MTLCaptureManager::sharedCaptureManager() };
+    if manager
+        .startCaptureWithDescriptor_error(&descriptor)
+        .is_err()
+    {
+        println!("Failed to start capture");
+    }
 }
 
 pub fn stop_capture(capture: Res<FrameCapture>) {
@@ -65,5 +75,5 @@ pub fn stop_capture(capture: Res<FrameCapture>) {
         return;
     }
 
-    metal::CaptureManager::shared().stop_capture();
+    unsafe { MTLCaptureManager::sharedCaptureManager() }.stopCapture();
 }

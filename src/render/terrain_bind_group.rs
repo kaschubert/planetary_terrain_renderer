@@ -9,7 +9,7 @@ use bevy::{
         query::ROQueryItem,
         system::{SystemParamItem, lifetimeless::SRes},
     },
-    math::Affine3,
+    math::{Affine3, Affine3Ext},
     prelude::*,
     render::{
         Extract,
@@ -17,7 +17,7 @@ use bevy::{
         render_phase::{PhaseItem, RenderCommand, RenderCommandResult, TrackedRenderPass},
         render_resource::*,
         renderer::RenderDevice,
-        storage::{GpuShaderStorageBuffer, ShaderStorageBuffer},
+        storage::{GpuShaderBuffer, ShaderBuffer},
         texture::FallbackImage,
     },
 };
@@ -114,7 +114,7 @@ pub struct TerrainUniform {
 
 impl TerrainUniform {
     pub fn new(tile_atlas: &TileAtlas, global_transform: &GlobalTransform) -> Self {
-        let transform = Affine3::from(&global_transform.affine());
+        let transform = Affine3::from(global_transform.affine());
         let world_from_local = transform.to_transpose();
         let (local_from_world_transpose_a, local_from_world_transpose_b) =
             transform.inverse_transpose_3x3();
@@ -135,7 +135,7 @@ impl TerrainUniform {
 pub struct GpuTerrain {
     pub(crate) terrain_bind_group: Option<BindGroup>,
 
-    terrain_buffer: Handle<ShaderStorageBuffer>,
+    terrain_buffer: Handle<ShaderBuffer>,
     atlas_sampler: Sampler,
     attachment_textures: [TextureView; 8],
     attachment_buffer: GpuBuffer<AttachmentUniform>,
@@ -176,7 +176,7 @@ impl GpuTerrain {
         let atlas_sampler = device.create_sampler(&SamplerDescriptor {
             mag_filter: FilterMode::Linear,
             min_filter: FilterMode::Linear,
-            mipmap_filter: FilterMode::Linear,
+            mipmap_filter: MipmapFilterMode::Linear,
             anisotropy_clamp: 16, // Todo: make this customisable
             ..default()
         });
@@ -211,7 +211,7 @@ impl GpuTerrain {
         device: Res<RenderDevice>,
         pipeline_cache: Res<PipelineCache>,
         prepass_pipelines: Res<TerrainTilingPrepassPipelines>,
-        buffers: Res<RenderAssets<GpuShaderStorageBuffer>>,
+        buffers: Res<RenderAssets<GpuShaderBuffer>>,
         mut gpu_terrains: ResMut<TerrainComponents<GpuTerrain>>,
     ) {
         let terrain_layout =

@@ -12,20 +12,16 @@ enum BufferType {
 }
 
 impl BufferType {
-    fn write<T: ShaderType + WriteInto>(self, value: &T, buffer: &mut impl AsMut<[u8]>) {
+    fn write<T: ShaderType + WriteInto>(self, value: &T, buffer: &mut [u8]) {
         match self {
             BufferType::None => {
                 unimplemented!("Can not write ShaderType to BufferType::None.");
             }
             BufferType::Uniform => {
-                encase::UniformBuffer::new(buffer.as_mut())
-                    .write(value)
-                    .unwrap();
+                encase::UniformBuffer::new(buffer).write(value).unwrap();
             }
             BufferType::Storage => {
-                encase::StorageBuffer::new(buffer.as_mut())
-                    .write(value)
-                    .unwrap();
+                encase::StorageBuffer::new(buffer).write(value).unwrap();
             }
         }
     }
@@ -147,10 +143,7 @@ impl<T: ShaderType + WriteInto> GpuBuffer<T> {
 
     pub fn update(&mut self, queue: &RenderQueue) {
         if let Some(value) = &self.value {
-            let mut buffer = queue
-                .write_buffer_with(&self.buffer, 0, value.size())
-                .unwrap();
-            self.buffer_type.write(value, &mut buffer);
+            queue.write_buffer(&self.buffer, 0, &self.buffer_type.write_vec(value));
         }
     }
 }
