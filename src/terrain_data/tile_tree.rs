@@ -109,6 +109,8 @@ pub struct TileTree {
     pub(crate) tree_size: u32,
     pub(crate) lod_count: u32,
     pub(crate) shape: TerrainShape,
+    pub(crate) min_height: f32,
+    pub(crate) max_height: f32,
     pub(crate) geometry_tile_count: u32,
     pub(crate) refinement_count: u32,
     pub(crate) grid_size: u32,
@@ -179,6 +181,8 @@ impl TileTree {
             tree_size: view_config.tree_size,
             lod_count: config.lod_count,
             shape: config.shape,
+            min_height: config.min_height,
+            max_height: config.max_height,
             geometry_tile_count: view_config.geometry_tile_count,
             refinement_count: view_config.refinement_count,
             grid_size: view_config.grid_size,
@@ -261,6 +265,42 @@ impl TileTree {
         tile_local_position.distance(self.view_local_position)
     }
 
+    /// Whether a tile lies entirely outside the view frustum.
+    ///
+    /// Mirrors frustum_cull_aabb in refine_tiles.wgsl, which culls the same tiles for
+    /// drawing. Doing it here as well means they are never loaded in the first place,
+    /// rather than loaded and then discarded by the gpu.
+    ///
+    /// The half spaces are in the view relative space the renderer works in, while tile
+    /// positions are absolute, hence the shift by the view position.
+    fn frustum_cull(&self, tile_coordinate: TileCoordinate) -> bool {
+        let tile_count = (tile_coordinate.lod as f64).exp2();
+
+        let mut aabb_min = Vec3::MAX;
+        let mut aabb_max = Vec3::MIN;
+
+        for (x, y) in iproduct!(0..2, 0..2) {
+            let uv = (tile_coordinate.xy.as_dvec2() + DVec2::new(x as f64, y as f64)) / tile_count;
+            let coordinate = Coordinate::new(tile_coordinate.face, uv);
+
+            for height in [self.min_height, self.max_height] {
+                let position = coordinate.local_position(self.shape, height);
+                let position =
+                    (position - self.view_local_position).as_vec3() + self.view_world_position;
+
+                aabb_min = aabb_min.min(position);
+                aabb_max = aabb_max.max(position);
+            }
+        }
+
+        self.half_spaces.iter().any(|half_space| {
+            let normal = half_space.truncate();
+            let closest_corner = Vec3::select(normal.cmpgt(Vec3::ZERO), aabb_max, aabb_min);
+
+            half_space.dot(closest_corner.extend(1.0)) < 0.0
+        })
+    }
+
     fn update(&mut self) {
         let view_coordinate = Coordinate::from_local_position(self.view_local_position, self.shape);
         self.view_face = view_coordinate.face;
@@ -283,7 +323,11 @@ impl TileTree {
                         self.compute_tile_distance(tile_coordinate, view_coordinate);
                     let load_distance = self.load_distance / (tile_coordinate.lod as f64).exp2();
 
-                    let state = if lod == 0 || tile_distance < load_distance {
+                    // Lod 0 is always kept: it is the fallback the tile tree falls back
+                    // to while anything finer is still loading.
+                    let state = if lod == 0
+                        || (tile_distance < load_distance && !self.frustum_cull(tile_coordinate))
+                    {
                         RequestState::Requested
                     } else {
                         RequestState::Released
@@ -354,7 +398,6 @@ impl TileTree {
         }
     }
 
-    /// Adjusts all tile_trees to their corresponding tile atlas
     /// Drops the tile trees of terrains that no longer exist.
     ///
     /// Every system below looks its terrain up with an unwrap, so a tile tree left behind
@@ -373,7 +416,8 @@ impl TileTree {
         }
     }
 
-    /// by updating the entries with the best available tiles.
+    /// Adjusts all tile trees to their corresponding tile atlas, by updating the entries
+    /// with the best available tiles.
     pub(crate) fn adjust_to_tile_atlas(
         mut tile_trees: ResMut<TerrainViewComponents<TileTree>>,
         tile_atlases: Query<&TileAtlas>,
