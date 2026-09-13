@@ -1,7 +1,7 @@
 use bevy::{
     prelude::*,
     render::{
-        Render, RenderApp, RenderSet, extract_resource::ExtractResource,
+        Render, RenderApp, RenderSystems, extract_resource::ExtractResource,
         extract_resource::ExtractResourcePlugin, renderer::RenderDevice,
     },
 };
@@ -16,8 +16,8 @@ impl Plugin for MetalCapturePlugin {
             .add_systems(Update, input_capture);
 
         app.sub_app_mut(RenderApp)
-            .add_systems(Render, start_capture.in_set(RenderSet::Prepare))
-            .add_systems(Render, stop_capture.in_set(RenderSet::Cleanup));
+            .add_systems(Render, start_capture.in_set(RenderSystems::Prepare))
+            .add_systems(Render, stop_capture.in_set(RenderSystems::Cleanup));
     }
 }
 
@@ -46,11 +46,9 @@ pub fn start_capture(capture: Res<FrameCapture>, device: Res<RenderDevice>) {
                 .as_secs()
         )));
     unsafe {
-        device
-            .wgpu_device()
-            .as_hal::<wgpu_core::api::Metal, _, ()>(|device| {
-                capture.set_capture_device(&device.unwrap().raw_device().lock());
-            })
+        if let Some(device) = device.wgpu_device().as_hal::<wgpu_core::api::Metal>() {
+            capture.set_capture_device(&device.raw_device().lock());
+        }
     };
 
     metal::CaptureManager::shared()

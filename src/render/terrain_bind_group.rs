@@ -1,4 +1,5 @@
 use crate::{
+    render::TerrainTilingPrepassPipelines,
     terrain::TerrainComponents,
     terrain_data::{GpuAttachment, GpuTileAtlas, TileAtlas},
     util::GpuBuffer,
@@ -208,16 +209,21 @@ impl GpuTerrain {
 
     pub(crate) fn prepare(
         device: Res<RenderDevice>,
+        pipeline_cache: Res<PipelineCache>,
+        prepass_pipelines: Res<TerrainTilingPrepassPipelines>,
         buffers: Res<RenderAssets<GpuShaderStorageBuffer>>,
         mut gpu_terrains: ResMut<TerrainComponents<GpuTerrain>>,
     ) {
+        let terrain_layout =
+            pipeline_cache.get_bind_group_layout(&prepass_pipelines.terrain_layout);
+
         for gpu_terrain in &mut gpu_terrains.values_mut() {
             let terrain_buffer = buffers.get(&gpu_terrain.terrain_buffer).unwrap();
 
             // Todo: be smarter about bind group recreation
             gpu_terrain.terrain_bind_group = Some(device.create_bind_group(
                 "terrain_bind_group",
-                &TerrainBindGroup::bind_group_layout(&device),
+                &terrain_layout,
                 &BindGroupEntries::sequential((
                     terrain_buffer.buffer.as_entire_binding(),
                     &gpu_terrain.attachment_buffer,

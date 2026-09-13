@@ -21,7 +21,7 @@ use bevy::{
             },
             *,
         },
-        renderer::{RenderContext, RenderDevice},
+        renderer::RenderContext,
         storage::{GpuShaderStorageBuffer, ShaderStorageBuffer},
     },
     window::PrimaryWindow,
@@ -133,17 +133,16 @@ pub struct GpuPickingData {
 #[derive(Resource)]
 pub struct PickingPipeline {
     id: CachedComputePipelineId,
-    layout: BindGroupLayout,
+    layout: BindGroupLayoutDescriptor,
 }
 
 pub fn initialize_picking_pipeline(
     mut commands: Commands,
-    device: Res<RenderDevice>,
     pipeline_cache: Res<PipelineCache>,
     asset_server: Res<AssetServer>,
 ) {
-    let layout = device.create_bind_group_layout(
-        None,
+    let layout = BindGroupLayoutDescriptor::new(
+        "picking_layout",
         &BindGroupLayoutEntries::sequential(
             ShaderStages::COMPUTE,
             (
@@ -194,7 +193,7 @@ impl render_graph::ViewNode for PickingPass {
 
         let bind_group = context.render_device().create_bind_group(
             None,
-            &picking_pipeline.layout,
+            &pipeline_cache.get_bind_group_layout(&picking_pipeline.layout),
             &BindGroupEntries::sequential((
                 buffer.buffer.as_entire_binding(),
                 &depth.depth_view,
