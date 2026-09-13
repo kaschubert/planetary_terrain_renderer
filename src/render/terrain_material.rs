@@ -12,7 +12,10 @@ use crate::{
     terrain_view::TerrainViewComponents,
 };
 use bevy::{
-    pbr::{MeshPipeline, MeshPipelineViewLayoutKey, SetMaterialBindGroup, SetMeshViewBindGroup},
+    pbr::{
+        MeshPipelineKey, MeshPipelineSystems, MeshPipelineViewLayoutKey, MeshPipelineViewLayouts,
+        SetMaterialBindGroup, SetMeshViewBindGroup, ViewKeyCache,
+    },
     prelude::*,
     render::{
         Render, RenderApp, RenderStartup, RenderSystems,
@@ -22,8 +25,7 @@ use bevy::{
         },
         render_resource::*,
         renderer::RenderDevice,
-        sync_world::MainEntity,
-        view::RetainedViewEntity,
+        view::ExtractedView,
     },
     shader::{ShaderDefVal, ShaderRef},
 };
@@ -32,6 +34,53 @@ use std::{hash::Hash, marker::PhantomData};
 #[derive(PartialEq, Eq, Clone, Hash)]
 pub struct TerrainPipelineKey {
     pub flags: TerrainPipelineFlags,
+    /// The mesh view bind group layout of the view, which depends on the features enabled for it.
+    pub view_layout_key: MeshPipelineViewLayoutKey,
+    /// The color format of the view target.
+    pub target_format: TextureFormat,
+}
+
+/// The shader defs bevy pairs with the bindings that only exist in the mesh view layout for `key`.
+///
+/// Environment maps and irradiance volumes are left out on purpose: the type of their bindings
+/// depends on device support, which this pipeline does not track. Their bindings stay undeclared
+/// in the terrain shaders, which is allowed, as the layout may hold bindings a shader does not use.
+fn view_layout_shader_defs(key: MeshPipelineViewLayoutKey) -> impl Iterator<Item = ShaderDefVal> {
+    [
+        (MeshPipelineViewLayoutKey::MULTISAMPLED, "MULTISAMPLED"),
+        (MeshPipelineViewLayoutKey::DEPTH_PREPASS, "DEPTH_PREPASS"),
+        (MeshPipelineViewLayoutKey::NORMAL_PREPASS, "NORMAL_PREPASS"),
+        (
+            MeshPipelineViewLayoutKey::MOTION_VECTOR_PREPASS,
+            "MOTION_VECTOR_PREPASS",
+        ),
+        (
+            MeshPipelineViewLayoutKey::DEFERRED_PREPASS,
+            "DEFERRED_PREPASS",
+        ),
+        (MeshPipelineViewLayoutKey::OIT_ENABLED, "OIT_ENABLED"),
+        (MeshPipelineViewLayoutKey::ATMOSPHERE, "ATMOSPHERE"),
+        (
+            MeshPipelineViewLayoutKey::TONEMAP_IN_SHADER,
+            "TONEMAP_IN_SHADER",
+        ),
+        (
+            MeshPipelineViewLayoutKey::SCREEN_SPACE_AMBIENT_OCCLUSION,
+            "SCREEN_SPACE_AMBIENT_OCCLUSION",
+        ),
+        (
+            MeshPipelineViewLayoutKey::SCREEN_SPACE_REFLECTIONS,
+            "SCREEN_SPACE_REFLECTIONS",
+        ),
+        (
+            MeshPipelineViewLayoutKey::CONTACT_SHADOWS,
+            "CONTACT_SHADOWS",
+        ),
+        (MeshPipelineViewLayoutKey::DISTANCE_FOG, "DISTANCE_FOG"),
+    ]
+    .into_iter()
+    .filter(move |(bit, _)| key.contains(*bit))
+    .map(|(_, def)| def.into())
 }
 
 bitflags::bitflags! {
@@ -195,8 +244,7 @@ impl TerrainPipelineFlags {
 /// The pipeline used to render the terrain entities.
 #[derive(Resource)]
 pub struct TerrainRenderPipeline<M: Material> {
-    view_layout: BindGroupLayoutDescriptor,
-    view_layout_multisampled: BindGroupLayoutDescriptor,
+    view_layouts: MeshPipelineViewLayouts,
     terrain_layout: BindGroupLayoutDescriptor,
     terrain_view_layout: BindGroupLayoutDescriptor,
     material_layout: BindGroupLayoutDescriptor,
@@ -208,7 +256,7 @@ pub struct TerrainRenderPipeline<M: Material> {
 impl<M: Material> FromWorld for TerrainRenderPipeline<M> {
     fn from_world(world: &mut World) -> Self {
         let device = world.resource::<RenderDevice>();
-        let mesh_pipeline = world.resource::<MeshPipeline>();
+        let view_layouts = world.resource::<MeshPipelineViewLayouts>().clone();
         let prepass_pipelines = world.resource::<TerrainTilingPrepassPipelines>();
 
         let vertex_shader = match M::vertex_shader() {
@@ -224,14 +272,7 @@ impl<M: Material> FromWorld for TerrainRenderPipeline<M> {
         };
 
         Self {
-            view_layout: mesh_pipeline
-                .get_view_layout(MeshPipelineViewLayoutKey::empty())
-                .main_layout
-                .clone(),
-            view_layout_multisampled: mesh_pipeline
-                .get_view_layout(MeshPipelineViewLayoutKey::MULTISAMPLED)
-                .main_layout
-                .clone(),
+            view_layouts,
             terrain_layout: prepass_pipelines.terrain_layout.clone(),
             terrain_view_layout: prepass_pipelines.terrain_view_layout.clone(),
             material_layout: M::bind_group_layout_descriptor(device),
@@ -252,18 +293,37 @@ impl<M: Material> SpecializedRenderPipeline for TerrainRenderPipeline<M> {
 
     fn specialize(&self, key: Self::Key) -> RenderPipelineDescriptor {
         let mut shader_defs = key.flags.shader_defs();
+        shader_defs.extend(view_layout_shader_defs(key.view_layout_key));
 
-        let mut bind_group_layout = match key.flags.msaa_samples() {
-            1 => vec![self.view_layout.clone()],
-            _ => {
-                shader_defs.push("MULTISAMPLED".into());
-                vec![self.view_layout_multisampled.clone()]
-            }
+        let view_layout = self
+            .view_layouts
+            .get_view_layout(key.view_layout_key)
+            .main_layout;
+
+        // Bevy only lays out its lookup tables when the matching cargo features are enabled,
+        // which this crate cannot see. The layout itself says whether they are bound.
+        let has_binding = |binding: u32| {
+            view_layout
+                .entries
+                .iter()
+                .any(|entry| entry.binding == binding)
         };
+        for (binding, def) in [
+            (34, "BLUE_NOISE_TEXTURE"),
+            (35, "AREA_LIGHT_LUTS"),
+            (37, "DFG_LUT"),
+        ] {
+            if has_binding(binding) {
+                shader_defs.push(def.into());
+            }
+        }
 
-        bind_group_layout.push(self.terrain_layout.clone());
-        bind_group_layout.push(self.terrain_view_layout.clone());
-        bind_group_layout.push(self.material_layout.clone());
+        let bind_group_layout = vec![
+            view_layout,
+            self.terrain_layout.clone(),
+            self.terrain_view_layout.clone(),
+            self.material_layout.clone(),
+        ];
 
         let mut vertex_shader_defs = shader_defs.clone();
         vertex_shader_defs.push("VERTEX".into());
@@ -273,7 +333,7 @@ impl<M: Material> SpecializedRenderPipeline for TerrainRenderPipeline<M> {
         RenderPipelineDescriptor {
             label: None,
             layout: bind_group_layout,
-            push_constant_ranges: default(),
+            immediate_size: 0,
             vertex: VertexState {
                 shader: self.vertex_shader.clone(),
                 entry_point: Some("vertex".into()),
@@ -294,15 +354,15 @@ impl<M: Material> SpecializedRenderPipeline for TerrainRenderPipeline<M> {
                 shader_defs: fragment_shader_defs,
                 entry_point: Some("fragment".into()),
                 targets: vec![Some(ColorTargetState {
-                    format: TextureFormat::bevy_default(),
+                    format: key.target_format,
                     blend: Some(BlendState::REPLACE),
                     write_mask: ColorWrites::ALL,
                 })],
             }),
             depth_stencil: Some(DepthStencilState {
                 format: TERRAIN_DEPTH_FORMAT,
-                depth_write_enabled: true,
-                depth_compare: CompareFunction::Greater,
+                depth_write_enabled: Some(true),
+                depth_compare: Some(CompareFunction::Greater),
                 stencil: StencilState {
                     front: StencilFaceState {
                         compare: CompareFunction::GreaterEqual,
@@ -348,20 +408,27 @@ pub(crate) fn queue_terrain<M: Material>(
     mut terrain_phases: ResMut<ViewSortedRenderPhases<TerrainItem>>,
     gpu_tile_atlases: Res<TerrainComponents<GpuTileAtlas>>,
     gpu_terrain_views: Res<TerrainViewComponents<GpuTerrainView>>,
-    mut views: Query<(MainEntity, &Msaa)>,
+    view_key_cache: Res<ViewKeyCache>,
+    views: Query<(&ExtractedView, &Msaa)>,
 ) where
     M::Data: PartialEq + Eq + Hash + Clone,
 {
     let draw_function = draw_functions.read().get_id::<DrawTerrain>().unwrap();
 
-    for (view, msaa) in &mut views {
-        let Some(terrain_phase) = terrain_phases.get_mut(&RetainedViewEntity {
-            main_entity: view.into(),
-            auxiliary_entity: Entity::PLACEHOLDER.into(),
-            subview_index: 0,
-        }) else {
+    for (extracted_view, msaa) in &views {
+        let retained_view = extracted_view.retained_view_entity;
+
+        let Some(terrain_phase) = terrain_phases.get_mut(&retained_view) else {
             continue;
         };
+
+        let view = retained_view.main_entity.id();
+
+        // The mesh view bind group of the view is laid out by the key bevy cached for it.
+        let view_key = view_key_cache
+            .get(&retained_view)
+            .copied()
+            .unwrap_or_else(|| MeshPipelineKey::from_msaa_samples(msaa.samples()));
 
         for (&terrain, gpu_tile_atlas) in gpu_tile_atlases.iter() {
             let Some(gpu_terrain_view) = gpu_terrain_views.get(&(terrain, view)) else {
@@ -382,11 +449,15 @@ pub(crate) fn queue_terrain<M: Material>(
                     | TerrainPipelineFlags::SAMPLE_GRAD;
             }
 
-            let key = TerrainPipelineKey { flags };
+            let key = TerrainPipelineKey {
+                flags,
+                view_layout_key: MeshPipelineViewLayoutKey::from(view_key),
+                target_format: extracted_view.target_format,
+            };
 
             let pipeline = pipelines.specialize(&pipeline_cache, &terrain_pipeline, key);
 
-            terrain_phase.add(TerrainItem {
+            terrain_phase.add_transient(TerrainItem {
                 representative_entity: (terrain, terrain.into()), // technically wrong
                 draw_function,
                 pipeline,
@@ -424,7 +495,8 @@ where
             .add_systems(
                 RenderStartup,
                 init_terrain_render_pipeline::<M>
-                    .after(initialize_terrain_tiling_prepass_pipelines),
+                    .after(initialize_terrain_tiling_prepass_pipelines)
+                    .after(MeshPipelineSystems),
             )
             .add_systems(
                 Render,

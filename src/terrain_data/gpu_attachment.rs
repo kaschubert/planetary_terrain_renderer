@@ -239,7 +239,7 @@ impl GpuAttachment {
         let atlas_sampler = device.create_sampler(&SamplerDescriptor {
             mag_filter: FilterMode::Linear,
             min_filter: FilterMode::Linear,
-            mipmap_filter: FilterMode::Linear,
+            mipmap_filter: MipmapFilterMode::Linear,
             ..default()
         });
 
@@ -303,6 +303,11 @@ impl GpuAttachment {
     ) {
         let mip_layout = pipeline_cache
             .get_bind_group_layout(&mip_pipelines.mip_layouts[&self.buffer_info.format]);
+
+        // The bind groups only live for one frame, whether or not the mips get generated.
+        self.mip_bind_groups
+            .iter_mut()
+            .for_each(|bind_groups| bind_groups.clear());
 
         for (mip_level, atlas_indices) in self.mips_to_generate.iter().enumerate() {
             for atlas_index in atlas_indices {

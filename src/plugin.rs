@@ -1,11 +1,11 @@
 use crate::{
     formats::TiffLoader,
-    preprocess::{MipPipelines, MipPrepass, initialize_mip_pipelines},
+    preprocess::{MipPipelines, initialize_mip_pipelines, mip_prepass},
     render::{
-        GpuTerrain, GpuTerrainView, TerrainItem, TerrainPass, TerrainTilingPrepassPipelines,
-        TilingPrepass, TilingPrepassItem, extract_terrain_phases, initialize_depth_copy_pipeline,
+        GpuTerrain, GpuTerrainView, TerrainItem, TerrainTilingPrepassPipelines, TilingPrepassItem,
+        extract_terrain_phases, initialize_depth_copy_pipeline,
         initialize_terrain_tiling_prepass_pipelines, prepare_terrain_depth_textures,
-        queue_tiling_prepass,
+        queue_tiling_prepass, terrain_pass, tiling_prepass,
     },
     shaders::{InternalShaders, load_terrain_shaders},
     terrain::{TerrainComponents, TerrainConfig},
@@ -15,14 +15,13 @@ use crate::{
     terrain_view::TerrainViewComponents,
 };
 use bevy::{
-    core_pipeline::core_3d::graph::{Core3d, Node3d},
+    core_pipeline::{Core3d, Core3dSystems, core_3d::main_opaque_pass_3d, schedule::camera_driver},
     prelude::*,
     render::{
         Render, RenderApp, RenderStartup, RenderSystems,
-        graph::CameraDriverLabel,
-        render_graph::{RenderGraph, RenderGraphExt, ViewNodeRunner},
         render_phase::{DrawFunctions, ViewSortedRenderPhases, sort_phase_system},
         render_resource::*,
+        renderer::{RenderGraph, RenderGraphSystems},
     },
 };
 use bevy_common_assets::ron::RonAssetPlugin;
@@ -124,25 +123,22 @@ impl Plugin for TerrainPlugin {
                     sort_phase_system::<TerrainItem>.in_set(RenderSystems::PhaseSort),
                     prepare_terrain_depth_textures.in_set(RenderSystems::PrepareResources),
                     (queue_tiling_prepass, GpuTileAtlas::queue).in_set(RenderSystems::Queue),
-                    GpuTileAtlas::_cleanup
-                        .before(World::clear_entities)
-                        .in_set(RenderSystems::Cleanup),
+                    GpuTileAtlas::_cleanup.in_set(RenderSystems::Cleanup),
                 ),
             )
-            .add_render_graph_node::<ViewNodeRunner<TerrainPass>>(Core3d, TerrainPass)
-            .add_render_graph_edges(
+            .add_systems(
                 Core3d,
-                (Node3d::StartMainPass, TerrainPass, Node3d::MainOpaquePass),
+                terrain_pass
+                    .in_set(Core3dSystems::MainPass)
+                    .before(main_opaque_pass_3d),
+            )
+            .add_systems(
+                RenderGraph,
+                (mip_prepass, tiling_prepass)
+                    .chain()
+                    .in_set(RenderGraphSystems::Render)
+                    .before(camera_driver),
             );
-
-        let mut render_graph = app
-            .sub_app_mut(RenderApp)
-            .world_mut()
-            .resource_mut::<RenderGraph>();
-        render_graph.add_node(MipPrepass, MipPrepass);
-        render_graph.add_node(TilingPrepass, TilingPrepass);
-        render_graph.add_node_edge(MipPrepass, TilingPrepass);
-        render_graph.add_node_edge(TilingPrepass, CameraDriverLabel);
     }
 
     fn finish(&self, app: &mut App) {

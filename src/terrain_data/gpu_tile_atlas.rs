@@ -32,12 +32,14 @@ pub struct GpuTileAtlas {
 }
 
 impl GpuTileAtlas {
-    pub(crate) fn generate_mip(&self, pass: &mut ComputePass, pipeline_cache: &PipelineCache) {
-        for attachment in self.attachments.values() {
+    /// Generates the mips of all tiles uploaded since the last generation.
+    ///
+    /// Attachments whose mip pipeline is still compiling keep their pending tiles for a later frame.
+    pub(crate) fn generate_mip(&mut self, pass: &mut ComputePass, pipeline_cache: &PipelineCache) {
+        for attachment in self.attachments.values_mut() {
             let Some(pipeline) = pipeline_cache.get_compute_pipeline(attachment.mip_pipeline)
             else {
-                dbg!("Skipped mipmap generation");
-                return; // Todo: In case the pipeline has not been loaded yet, but a mip map should be created, we should not skip and clear the mip map generation list
+                continue;
             };
 
             pass.set_pipeline(pipeline);
@@ -57,6 +59,11 @@ impl GpuTileAtlas {
                     );
                 }
             }
+
+            attachment
+                .mips_to_generate
+                .iter_mut()
+                .for_each(|atlas_indices| atlas_indices.clear());
         }
     }
 
@@ -108,17 +115,6 @@ impl GpuTileAtlas {
                 &mut tile_atlas.uploading_tiles,
                 &mut gpu_tile_atlas.upload_tiles,
             );
-
-            for attachment in gpu_tile_atlas.attachments.values_mut() {
-                attachment
-                    .mips_to_generate
-                    .iter_mut()
-                    .for_each(|atlas_indices| atlas_indices.clear());
-                attachment
-                    .mip_bind_groups
-                    .iter_mut()
-                    .for_each(|bind_groups| bind_groups.clear());
-            }
 
             for tile in &gpu_tile_atlas.upload_tiles {
                 let attachment = gpu_tile_atlas.attachments.get_mut(&tile.label).unwrap();
