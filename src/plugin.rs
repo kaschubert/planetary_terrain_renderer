@@ -77,6 +77,7 @@ impl Plugin for TerrainPlugin {
                     // Todo: enable visibility checking again
                     // check_visibility::<With<TileAtlas>>.in_set(VisibilitySystems::CheckVisibility),
                     (
+                        TileTree::despawn,
                         TileTree::compute_requests,
                         finish_loading,
                         TileAtlas::update,
@@ -104,7 +105,8 @@ impl Plugin for TerrainPlugin {
                 (
                     extract_terrain_phases,
                     GpuTileAtlas::initialize,
-                    GpuTileAtlas::extract.after(GpuTileAtlas::initialize),
+                    GpuTileAtlas::despawn.after(GpuTileAtlas::initialize),
+                    GpuTileAtlas::extract.after(GpuTileAtlas::despawn),
                     GpuTerrain::initialize.after(GpuTileAtlas::initialize),
                     GpuTerrainView::initialize,
                 ),

@@ -7,6 +7,7 @@ use crate::{
 };
 use bevy::{
     asset::RenderAssetUsages,
+    ecs::entity::EntityHashSet,
     math::{DVec2, DVec3, primitives::ViewFrustum},
     prelude::*,
     render::{
@@ -162,10 +163,13 @@ impl TileTree {
         approximate_height_buffer.buffer_description.usage |= BufferUsages::COPY_SRC;
         let approximate_height_buffer = buffers.add(approximate_height_buffer);
 
+        // Parented to the terrain: the readback outlives it otherwise, and its observer
+        // then looks up a tile tree that despawning has already removed.
         commands
             .spawn((
                 TerrainViewKey(terrain_view),
                 Readback::buffer(approximate_height_buffer.clone()),
+                ChildOf(terrain_view.0),
             ))
             .observe(Self::approximate_height_readback);
 
@@ -351,6 +355,24 @@ impl TileTree {
     }
 
     /// Adjusts all tile_trees to their corresponding tile atlas
+    /// Drops the tile trees of terrains that no longer exist.
+    ///
+    /// Every system below looks its terrain up with an unwrap, so a tile tree left behind
+    /// by a despawned terrain panics on the next frame.
+    pub(crate) fn despawn(
+        mut tile_trees: ResMut<TerrainViewComponents<TileTree>>,
+        mut despawned: RemovedComponents<TileAtlas>,
+    ) {
+        // Keyed on removals rather than on which terrains are currently alive: spawning is
+        // deferred through a command, so a terrain can have its tile tree inserted a
+        // moment before its entity appears, and a liveness check would drop it.
+        let despawned = despawned.read().collect::<EntityHashSet>();
+
+        if !despawned.is_empty() {
+            tile_trees.retain(|&(terrain, _view), _| !despawned.contains(&terrain));
+        }
+    }
+
     /// by updating the entries with the best available tiles.
     pub(crate) fn adjust_to_tile_atlas(
         mut tile_trees: ResMut<TerrainViewComponents<TileTree>>,
@@ -402,8 +424,14 @@ impl TileTree {
         terrain_view: Query<&TerrainViewKey>,
         mut tile_trees: ResMut<TerrainViewComponents<TileTree>>,
     ) {
-        let TerrainViewKey(terrain_view) = terrain_view.get(trigger.event().entity).unwrap();
-        let tile_tree = tile_trees.get_mut(terrain_view).unwrap();
+        let Ok(TerrainViewKey(terrain_view)) = terrain_view.get(trigger.event().entity) else {
+            return;
+        };
+        // A readback in flight when its terrain despawned has nothing left to write to.
+        let Some(tile_tree) = tile_trees.get_mut(terrain_view) else {
+            return;
+        };
+
         tile_tree.approximate_height = trigger.event().to_shader_type();
     }
 }

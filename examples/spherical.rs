@@ -3,6 +3,7 @@ use bevy::window::WindowResolution;
 use bevy::{prelude::*, reflect::TypePath, render::render_resource::*, shader::ShaderRef};
 use bevy_terrain::math::Coordinate;
 use bevy_terrain::prelude::*;
+use big_space::prelude::{CellCoord, Grids};
 
 const RADIUS: f64 = 6371000.0;
 
@@ -31,6 +32,92 @@ impl Material for CustomMaterial {
     }
 }
 
+/// A terrain that is only kept resident while the camera is near it.
+///
+/// Each terrain allocates its atlas textures up front, whether or not it is on screen, so
+/// holding all of them costs the same as looking at all of them. Spawning by distance
+/// trades a load pause on approach for the memory of the ones you are nowhere near.
+struct StreamedTerrain {
+    path: &'static str,
+    order: u32,
+    gradient_mode: u32,
+    longitude: f64,
+    latitude: f64,
+    /// Spawned when the camera comes within this distance of the terrain's centre, and
+    /// despawned once it passes DESPAWN_MARGIN beyond it. None means always resident,
+    /// which is what the base globe wants.
+    ///
+    /// Spawning is not instant - the terrain still has to stream its tiles in - so this
+    /// wants to be comfortably further out than the distance at which the detail becomes
+    /// visible, or it pops in. It also has to be small enough that two neighbours are
+    /// never resident at once: wellington and auckland are 493 km apart, so with the
+    /// margin below the pair can never both be live.
+    radius: Option<f64>,
+}
+
+/// How much further than its radius a terrain is kept before being despawned. Without it
+/// a terrain sitting exactly on the boundary spawns and despawns every frame.
+const DESPAWN_MARGIN: f64 = 40_000.0;
+
+const STREAMED_TERRAINS: &[StreamedTerrain] = &[
+    StreamedTerrain {
+        path: "terrains/earth/config.tc.ron",
+        order: 0,
+        gradient_mode: 2,
+        longitude: 0.0,
+        latitude: 0.0,
+        radius: None,
+    },
+    StreamedTerrain {
+        path: "terrains/nz/config.tc.ron",
+        order: 1,
+        gradient_mode: 2,
+        longitude: 173.0,
+        latitude: -41.0,
+        radius: Some(2_000_000.0),
+    },
+    StreamedTerrain {
+        path: "terrains/wellington/config.tc.ron",
+        order: 2,
+        gradient_mode: 2,
+        longitude: 174.7762,
+        latitude: -41.2866,
+        radius: Some(200_000.0),
+    },
+    StreamedTerrain {
+        path: "terrains/auckland/config.tc.ron",
+        order: 2,
+        gradient_mode: 2,
+        longitude: 174.7633,
+        latitude: -36.8485,
+        radius: Some(200_000.0),
+    },
+];
+
+#[derive(Resource)]
+struct TerrainStreaming {
+    view: Entity,
+    gradient: Handle<Image>,
+    /// The spawned entity per entry of STREAMED_TERRAINS.
+    active: Vec<Option<Entity>>,
+    /// The entry whose spawn has been requested but whose entity is not known yet.
+    /// spawn_terrain does not return one, so it is claimed from Added<TileAtlas>, which
+    /// only works while at most one spawn is in flight.
+    pending: Option<usize>,
+}
+
+/// Converts longitude and latitude to a position on the spheroid. Matches the unit sphere
+/// convention the preprocessor warps with, see CubeTransformer in transformers.rs.
+fn unit_position(longitude: f64, latitude: f64) -> DVec3 {
+    let (longitude, latitude) = (longitude.to_radians(), latitude.to_radians());
+
+    DVec3::new(
+        -latitude.cos() * longitude.cos(),
+        latitude.sin(),
+        latitude.cos() * longitude.sin(),
+    )
+}
+
 fn main() {
     App::new()
         .add_plugins((
@@ -49,9 +136,19 @@ fn main() {
             TerrainDebugPlugin, // enable debug settings and controls
             TerrainPickingPlugin,
         ))
+        // A terrain costs roughly 2.6 MiB per atlas slot, for height and albedo together,
+        // so the default atlas size is about 2.6 GiB each. Four at once does not fit a
+        // 12 GiB card, which is what stream_terrains is for: the two cities are 500 km
+        // apart and never resident together, so the most that is ever live is the globe,
+        // the country and one city.
+        //
+        // The atlas cannot be shrunk much instead of this: the tile tree asks for
+        // lod_count x tree_size squared tiles per terrain, and the city terrains are 16
+        // lods deep, so halving it runs the atlas out of indices.
         .insert_resource(TerrainSettings::new(vec!["albedo"]))
         // .insert_resource(ClearColor(Color::WHITE))
         .add_systems(Startup, initialize)
+        .add_systems(Update, stream_terrains)
         .run();
 }
 
@@ -107,102 +204,92 @@ fn initialize(
             .id();
     });
 
-    commands.spawn_terrain(
-        asset_server.load("terrains/earth/config.tc.ron"),
-        TerrainViewConfig::default(),
-        CustomMaterial {
-            gradient: gradient1.clone(),
-            gradient_info: GradientInfo { mode: 2 },
-        },
+    // Terrains are no longer spawned here: stream_terrains spawns and despawns them as
+    // the camera moves, so only the ones nearby hold atlas memory.
+    commands.insert_resource(TerrainStreaming {
         view,
-    );
+        gradient: gradient1.clone(),
+        active: vec![None; STREAMED_TERRAINS.len()],
+        pending: None,
+    });
+}
 
-    // commands.spawn_terrain(
-    //     asset_server.load("terrains/los/config.tc.ron"),
-    //     TerrainViewConfig {
-    //         order: 1,
-    //         ..default()
-    //     },
-    //     CustomMaterial {
-    //         gradient: gradient2.clone(),
-    //         gradient_info: GradientInfo { mode: 0 },
-    //     },
-    //     view,
-    // );
+/// Keeps the terrains near the camera resident and drops the rest.
+fn stream_terrains(
+    mut commands: Commands,
+    mut streaming: ResMut<TerrainStreaming>,
+    grids: Grids,
+    camera: Query<(Entity, &Transform, &CellCoord), With<OrbitalCameraController>>,
+    spawned: Query<Entity, Added<TileAtlas>>,
+    asset_server: Res<AssetServer>,
+) {
+    // spawn_terrain hands back no entity, so the one that turned up this frame belongs to
+    // whichever spawn is in flight. Only one is ever in flight, so there is no ambiguity.
+    if let Some(index) = streaming.pending
+        && let Some(terrain) = spawned.iter().next()
+    {
+        streaming.active[index] = Some(terrain);
+        streaming.pending = None;
+    }
 
-    // //
-    // commands.spawn_terrain(
-    //     asset_server.load("terrains/npd/config.tc.ron"),
-    //     TerrainViewConfig {
-    //         order: 2,
-    //         ..default()
-    //     },
-    //     CustomMaterial {
-    //         gradient: gradient2.clone(),
-    //         gradient_info: GradientInfo { mode: 0 },
-    //     },
-    //     view,
-    // );
-    //
-    // commands.spawn_terrain(
-    //     asset_server.load("terrains/utsira/config.tc.ron"),
-    //     TerrainViewConfig {
-    //         order: 1,
-    //         ..default()
-    //     },
-    //     CustomMaterial {
-    //         gradient: gradient2.clone(),
-    //         gradient_info: GradientInfo { mode: 0 },
-    //     },
-    //     view,
-    // );
-    //
-    // commands.spawn_terrain(
-    //     asset_server.load("terrains/sas/config.tc.ron"),
-    //     TerrainViewConfig {
-    //         order: 2,
-    //         ..default()
-    //     },
-    //     CustomMaterial {
-    //         gradient: gradient2.clone(),
-    //         gradient_info: GradientInfo { mode: 3 },
-    //     },
-    //     view,
-    // );
-    //
-    // LINZ New Zealand dataset: download and preprocess it first, see
-    // preprocess/download_nz.sh and preprocess/examples/preprocess_nz.rs
-    commands.spawn_terrain(
-        asset_server.load("terrains/nz/config.tc.ron"),
-        TerrainViewConfig {
-            order: 1,
-            ..default()
-        },
-        CustomMaterial {
-            gradient: gradient1.clone(),
-            gradient_info: GradientInfo { mode: 2 },
-        },
-        view,
-    );
+    let Ok((camera, camera_transform, camera_cell)) = camera.single() else {
+        return;
+    };
+    let Some(grid) = grids.parent_grid(camera) else {
+        return;
+    };
 
-    // High-resolution Wellington: 1 m LiDAR elevation and 0.075 m aerial colour, see
-    // preprocess/download_wellington.sh and preprocess/examples/preprocess_wellington.rs.
-    // The 0.075 m survey only flew Wellington city, so colour covers about a quarter of
-    // the elevation; the rest has geometry but no imagery.
-    commands.spawn_terrain(
-        asset_server.load("terrains/wellington/config.tc.ron"),
-        TerrainViewConfig {
-            // Above the nz terrain it sits inside: the stencil test keeps whichever
-            // order is greatest where two terrains cover the same ground.
-            order: 2,
-            ..default()
-        },
-        CustomMaterial {
-            gradient: gradient1.clone(),
-            gradient_info: GradientInfo { mode: 2 },
-        },
-        view,
-    );
+    let camera_position = grid.grid_position_double(camera_cell, camera_transform);
+
+    for (index, terrain) in STREAMED_TERRAINS.iter().enumerate() {
+        let wanted = match terrain.radius {
+            None => true,
+            Some(radius) => {
+                let centre = Coordinate::from_unit_position(
+                    unit_position(terrain.longitude, terrain.latitude),
+                    true,
+                )
+                .local_position(TerrainShape::WGS84, 0.0);
+
+                let threshold = if streaming.active[index].is_some() {
+                    radius + DESPAWN_MARGIN
+                } else {
+                    radius
+                };
+
+                camera_position.distance(centre) < threshold
+            }
+        };
+
+        match (wanted, streaming.active[index]) {
+            // One spawn at a time, so the entity it produces can be identified above.
+            (true, None) if streaming.pending.is_none() => {
+                commands.spawn_terrain(
+                    asset_server.load(terrain.path),
+                    TerrainViewConfig {
+                        order: terrain.order,
+                        ..default()
+                    },
+                    CustomMaterial {
+                        gradient: streaming.gradient.clone(),
+                        gradient_info: GradientInfo {
+                            mode: terrain.gradient_mode,
+                        },
+                    },
+                    streaming.view,
+                );
+
+                streaming.pending = Some(index);
+            }
+            (false, Some(entity)) => {
+                // TileTree::despawn and GpuTileAtlas::despawn drop the data that hangs off
+                // this entity, on the main and render worlds respectively.
+                commands.entity(entity).despawn();
+                streaming.active[index] = None;
+            }
+            _ => {}
+        }
+    }
 
     // commands.spawn_terrain(
     //     asset_server.load("terrains/swiss/config.tc.ron"),

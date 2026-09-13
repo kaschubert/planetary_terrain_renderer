@@ -1,12 +1,15 @@
 use crate::{
     plugin::TerrainSettings,
     preprocess::{MipPipelineKey, MipPipelines},
+    render::{GpuTerrain, GpuTerrainView, TilingPrepassItem},
     terrain::TerrainComponents,
     terrain_data::{
         AttachmentData, AttachmentLabel, AttachmentTileWithData, GpuAttachment, TileAtlas,
     },
+    terrain_view::TerrainViewComponents,
 };
 use bevy::{
+    ecs::entity::EntityHashSet,
     platform::collections::HashMap,
     prelude::*,
     render::{
@@ -98,6 +101,26 @@ impl GpuTileAtlas {
         for (terrain, tile_atlas) in tile_atlases.iter_mut() {
             gpu_tile_atlases.insert(terrain, GpuTileAtlas::new(&device, tile_atlas, &settings));
         }
+    }
+
+    /// Drops the gpu data of terrains that no longer exist in the main world.
+    ///
+    /// These resources live in the render world and are only ever inserted, by
+    /// `initialize`, so without this a despawned terrain keeps its atlas textures
+    /// allocated for the lifetime of the app - several hundred MiB each.
+    pub(crate) fn despawn(
+        mut gpu_tile_atlases: ResMut<TerrainComponents<GpuTileAtlas>>,
+        mut gpu_terrains: ResMut<TerrainComponents<GpuTerrain>>,
+        mut gpu_terrain_views: ResMut<TerrainViewComponents<GpuTerrainView>>,
+        mut prepass_items: ResMut<TerrainViewComponents<TilingPrepassItem>>,
+        tile_atlases: Extract<Query<Entity, With<TileAtlas>>>,
+    ) {
+        let alive = tile_atlases.iter().collect::<EntityHashSet>();
+
+        gpu_tile_atlases.retain(|terrain, _| alive.contains(terrain));
+        gpu_terrains.retain(|terrain, _| alive.contains(terrain));
+        gpu_terrain_views.retain(|(terrain, _), _| alive.contains(terrain));
+        prepass_items.retain(|(terrain, _), _| alive.contains(terrain));
     }
 
     /// Extracts the tiles that have finished loading from all [`TileAtlas`]es into the
