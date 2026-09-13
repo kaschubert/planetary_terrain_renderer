@@ -151,8 +151,8 @@ fn main() {
             ..TerrainSettings::new(vec!["albedo"])
         })
         // .insert_resource(ClearColor(Color::WHITE))
-        .add_systems(Startup, initialize)
-        .add_systems(Update, stream_terrains)
+        .add_systems(Startup, (initialize, spawn_hotkey_list))
+        .add_systems(Update, (stream_terrains, toggle_hotkey_list))
         .run();
 }
 
@@ -166,6 +166,74 @@ fn main() {
 struct VramUsage {
     allocated: Arc<AtomicU64>,
     reserved: Arc<AtomicU64>,
+}
+
+/// The README is the one place the controls are written down, so the in-app list is
+/// rendered from it rather than kept as a second copy that could drift.
+const README: &str = include_str!("../README.md");
+
+#[derive(Component)]
+struct HotkeyList;
+
+/// The Debug Controls section of the README as plain text: its headings and bullets,
+/// without the markdown or the prose around them.
+fn hotkey_list_text() -> String {
+    let section = README
+        .split_once("## Debug Controls")
+        .map_or("", |(_, rest)| rest);
+    let section = &section[..section.find("\n## ").unwrap_or(section.len())];
+
+    section
+        .lines()
+        .filter_map(|line| {
+            if let Some(heading) = line.strip_prefix("### ") {
+                Some(format!("\n{heading}"))
+            } else if line.starts_with("- ") {
+                Some(line.replace('`', ""))
+            } else {
+                None
+            }
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+fn spawn_hotkey_list(mut commands: Commands) {
+    commands.spawn((
+        HotkeyList,
+        Text::new(hotkey_list_text()),
+        TextFont {
+            font_size: FontSize::Px(13.0),
+            ..default()
+        },
+        Node {
+            position_type: PositionType::Absolute,
+            // Below the fps overlay, whose graph puts its bottom edge around 120 px.
+            top: Val::Px(150.0),
+            left: Val::Px(6.0),
+            // Bounded so the longer lines wrap instead of running across the screen.
+            width: Val::Px(560.0),
+            padding: UiRect::all(Val::Px(6.0)),
+            ..default()
+        },
+        BackgroundColor(Color::srgba(0.0, 0.0, 0.0, 0.5)),
+    ));
+}
+
+fn toggle_hotkey_list(
+    input: Res<ButtonInput<KeyCode>>,
+    mut list: Query<&mut Visibility, With<HotkeyList>>,
+) {
+    if !input.just_pressed(KeyCode::F1) {
+        return;
+    }
+
+    for mut visibility in &mut list {
+        *visibility = match *visibility {
+            Visibility::Hidden => Visibility::Inherited,
+            _ => Visibility::Hidden,
+        };
+    }
 }
 
 #[derive(Component)]

@@ -80,6 +80,7 @@ using only the mouse.
 
 ### Visualization Toggles
 
+- `F1` - toggle this list of controls inside the app
 - `W` - toggle wireframe view
 - `L` - toggle terrain data LOD view
 - `Y` - toggle terrain geometry LOD view
