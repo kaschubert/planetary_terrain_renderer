@@ -12,9 +12,10 @@ use std::sync::atomic::{AtomicU64, Ordering};
 
 const RADIUS: f64 = 6371000.0;
 
-// Where the camera starts: over Wellington, the finest terrain in the scene.
-const CAMERA_LONGITUDE: f64 = 174.7762;
-const CAMERA_LATITUDE: f64 = -41.2866;
+// Where the camera starts: over Auckland, looking north over the harbour from the city
+// centre, with West and South Auckland to either side.
+const CAMERA_LONGITUDE: f64 = 174.7633;
+const CAMERA_LATITUDE: f64 = -36.8485;
 const CAMERA_ALTITUDE: f32 = 1000.0;
 
 #[derive(ShaderType, Clone)]
@@ -89,13 +90,17 @@ const STREAMED_TERRAINS: &[StreamedTerrain] = &[
         latitude: -41.2866,
         radius: Some(200_000.0),
     },
+    // Three Topo50 sheets - the centre, West and South Auckland - as one terrain, so the
+    // boundaries between them are interior and stitch. Centred on the middle of the three
+    // rather than on the city. The radius stays under the 200 the others use to keep well
+    // clear of Wellington 483 km away, which at 200 either side would be a 3 km margin.
     StreamedTerrain {
         path: "terrains/auckland/config.tc.ron",
         order: 2,
         gradient_mode: 2,
-        longitude: 174.7633,
-        latitude: -36.8485,
-        radius: Some(200_000.0),
+        longitude: 174.7550,
+        latitude: -36.9450,
+        radius: Some(150_000.0),
     },
 ];
 
@@ -141,11 +146,12 @@ fn main() {
         ))
         // A terrain costs roughly 2.6 MiB per atlas slot, for height and albedo together,
         // and the atlas is allocated whole however few slots are in use. With loading
-        // culled to the view frustum the three resident terrains hold about 300 slots
-        // between them, against 3084 at the default size, so 256 each leaves better than
-        // twice that in hand for the burst a fast turn requests before released slots
-        // cycle back. Running out no longer panics either: the finest tiles just go
-        // missing until the tree re-requests them, with a warning in the log.
+        // culled to the view frustum the resident terrains hold about a hundred slots
+        // each, against 1028 at the default size, so 256 leaves better than twice that in
+        // hand for the burst a fast turn requests before released slots cycle back. Four
+        // are resident at once at most - the globe, the country and a city - which is
+        // about 2.0 GiB. Running out no longer panics either: the
+        // finest tiles just go missing until the tree re-requests them, with a warning.
         .insert_resource(TerrainSettings {
             atlas_size: 256,
             ..TerrainSettings::new(vec!["albedo"])
