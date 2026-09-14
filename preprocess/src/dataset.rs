@@ -161,7 +161,9 @@ impl PreprocessContext {
             .flatten()
             .filter(|path| {
                 let path = path.to_str().unwrap();
-                path.ends_with(".tif") || path.ends_with(".tiff")
+                // .vrt as well as the rasters themselves, so a source can be a virtual
+                // one: a level whose colour has been matched to another, say.
+                path.ends_with(".tif") || path.ends_with(".tiff") || path.ends_with(".vrt")
             })
             .map(|path| Dataset::open(path).unwrap())
             .collect_vec();
