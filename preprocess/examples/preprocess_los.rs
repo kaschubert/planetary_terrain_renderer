@@ -25,6 +25,7 @@ fn main() {
         border_size: 2,
         mip_level_count: 1,
         format: AttachmentFormat::R32F,
+        provenance_only: provenance_only(),
     };
 
     let (src_dataset, mut context) = PreprocessContext::from_cli(args).unwrap();

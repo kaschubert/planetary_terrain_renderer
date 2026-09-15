@@ -54,6 +54,19 @@ pub struct Cli {
     pub mip_level_count: u32,
     #[arg(long, default_value = "r16u")]
     pub format: AttachmentFormat,
+    /// Write the provenance file from the sources' manifests and stop, touching no tiles.
+    #[arg(long, default_value_t = false)]
+    pub provenance_only: bool,
+}
+
+/// Whether `--provenance-only` was passed.
+///
+/// The examples hold the source lists for the terrains that ship with the renderer, so
+/// backfilling one means running its example rather than retyping a dozen paths. They
+/// build their [`Cli`] as a literal instead of parsing one, so they ask for the flag
+/// through here.
+pub fn provenance_only() -> bool {
+    std::env::args().any(|argument| argument == "--provenance-only")
 }
 
 pub(crate) struct PreprocessBar<'a> {

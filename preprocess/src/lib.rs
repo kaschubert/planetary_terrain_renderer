@@ -3,6 +3,7 @@ mod dataset;
 mod downsample;
 mod fill_no_data;
 mod gdal_extension;
+mod provenance;
 mod reproject;
 mod result;
 mod split;
@@ -14,6 +15,7 @@ use crate::{
     dataset::{PreprocessContext, clear_directory, clear_directory_except, delete_directory},
     downsample::downsample_and_stitch,
     fill_no_data::create_mask_and_fill_no_data,
+    provenance::SourceProvenance,
     reproject::{check_disk_space, reproject},
     split::split_and_stitch,
 };
@@ -27,7 +29,7 @@ use std::{fs, time::Instant};
 
 pub mod prelude {
     pub use crate::{
-        cli::Cli,
+        cli::{Cli, provenance_only},
         dataset::{PreprocessContext, PreprocessDataType, PreprocessNoData},
         preprocess,
     };
@@ -79,11 +81,21 @@ fn preprocess_gen<T: Copy + GdalType + PartialEq + NumCast>(
     delete_directory(&context.temp_dir);
 
     save_terrain_config(tiles, context);
+    save_terrain_provenance(context);
 
     println!("Preprocessing took: {:?}", start_preprocessing.elapsed());
 }
 
 pub fn preprocess(src_dataset: Dataset, context: &mut PreprocessContext) {
+    if context.provenance_only {
+        // Backfilling a terrain that was built before its sources were documented. The
+        // tiles are already correct; only the record of where they came from is missing,
+        // and rebuilding them to recover it would cost a day of warping for a few
+        // kilobytes of text.
+        save_terrain_provenance(context);
+        return;
+    }
+
     macro_rules! preprocess_gen {
         ($data_type:ty) => {
             preprocess_gen::<$data_type>(src_dataset, context)
@@ -130,4 +142,24 @@ fn save_terrain_config(tiles: Vec<TileCoordinate>, context: &PreprocessContext) 
     }
 
     config.save_file(&file_path).unwrap();
+}
+
+/// Records this run's sources beside the terrain config, keyed by attachment so the height
+/// run and the albedo run each own their entry and neither erases the other's.
+fn save_terrain_provenance(context: &PreprocessContext) {
+    let file_path = context.terrain_path.join(PROVENANCE_FILE);
+
+    let mut provenance = TerrainProvenance::load_or_empty(&file_path)
+        .unwrap_or_else(|error| panic!("{}: {error}", file_path.display()));
+
+    provenance.sources.insert(
+        context.attachment_label.clone(),
+        context
+            .sources
+            .iter()
+            .map(SourceProvenance::record)
+            .collect(),
+    );
+
+    provenance.save_file(&file_path).unwrap();
 }

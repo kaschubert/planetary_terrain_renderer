@@ -53,6 +53,7 @@ fn main() {
         border_size: 4,
         mip_level_count: 2,
         format: AttachmentFormat::R32F,
+        provenance_only: provenance_only(),
     };
 
     let (src_dataset, mut context) = PreprocessContext::from_cli(args).unwrap();
@@ -90,6 +91,7 @@ fn main() {
         border_size: 2,
         mip_level_count: 4,
         format: AttachmentFormat::Rgba8U,
+        provenance_only: provenance_only(),
     };
 
     let (src_dataset, mut context) = PreprocessContext::from_cli(args).unwrap();

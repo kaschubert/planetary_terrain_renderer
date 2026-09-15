@@ -1,5 +1,6 @@
 use crate::{
     cli::Cli,
+    provenance::SourceProvenance,
     result::{PreprocessError, PreprocessResult},
 };
 use bevy_terrain::{
@@ -77,6 +78,10 @@ pub struct PreprocessContext {
     pub(crate) overwrite: bool,
     pub(crate) resume: bool,
     pub(crate) disk_budget: Option<u64>,
+    pub(crate) provenance_only: bool,
+    /// One per src_path argument, in the order given. The expansion below used to flatten
+    /// these away, which is why a built terrain could not say where its pixels came from.
+    pub(crate) sources: Vec<SourceProvenance>,
 
     pub(crate) min_height: f32,
     pub(crate) max_height: f32,
@@ -106,6 +111,7 @@ impl PreprocessContext {
             border_size,
             mip_level_count,
             format,
+            provenance_only,
         } = args;
 
         PreprocessContext::initialize(
@@ -128,6 +134,7 @@ impl PreprocessContext {
             overwrite,
             resume,
             disk_budget,
+            provenance_only,
         )
     }
 
@@ -148,23 +155,18 @@ impl PreprocessContext {
         overwrite: bool,
         resume: bool,
         disk_budget: Option<u64>,
+        provenance_only: bool,
     ) -> PreprocessResult<(Dataset, Self)> {
-        let mut src_datasets = src_path
+        // Per argument rather than over one flat list, because which rasters came from
+        // which directory is exactly what the manifests are keyed on.
+        let sources = src_path
+            .into_iter()
+            .map(SourceProvenance::resolve)
+            .collect::<PreprocessResult<Vec<_>>>()?;
+
+        let mut src_datasets = sources
             .iter()
-            .map(|src_path| {
-                if src_path.is_dir() {
-                    iter_directory(&src_path).collect_vec()
-                } else {
-                    vec![src_path.clone()]
-                }
-            })
-            .flatten()
-            .filter(|path| {
-                let path = path.to_str().unwrap();
-                // .vrt as well as the rasters themselves, so a source can be a virtual
-                // one: a level whose colour has been matched to another, say.
-                path.ends_with(".tif") || path.ends_with(".tiff") || path.ends_with(".vrt")
-            })
+            .flat_map(|source| &source.rasters)
             .map(|path| Dataset::open(path).unwrap())
             .collect_vec();
 
@@ -219,6 +221,8 @@ impl PreprocessContext {
                 overwrite,
                 resume,
                 disk_budget: disk_budget.map(|gib| gib << 30),
+                provenance_only,
+                sources,
                 min_height: f32::MAX,
                 max_height: f32::MIN,
                 create_mask,
