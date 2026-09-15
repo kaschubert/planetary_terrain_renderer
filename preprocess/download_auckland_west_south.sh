@@ -40,9 +40,24 @@
 # Requires rclone (sudo apt install rclone). The remote is defined in the rclone.conf next
 # to this script, so no AWS credentials and no configuration in your home directory are
 # needed.
+#
+# Each level directory gets a manifest.ron recording the bucket path its tiles came from,
+# the survey and its capture date, the sheets on disk and the tile count. The preprocessor
+# carries it into the terrain, which otherwise has no way to say what it is showing. Pass
+# --manifest-only to write manifests for tiles already downloaded, without fetching.
 set -euo pipefail
 
 DIR="$(cd "$(dirname "$0")" && pwd)"
+
+source "$DIR/manifest.sh"
+
+MANIFEST_ONLY=0
+
+if [[ ${1-} == --manifest-only ]]; then
+    MANIFEST_ONLY=1
+    shift
+fi
+
 SHEETS=("$@")
 
 if ((${#SHEETS[@]} == 0)); then
@@ -72,14 +87,22 @@ filters() { # restrict to .tiff, and to the requested Topo50 sheets
     done
 }
 
-fetch() { # <src> <dest>
-    local src=$1 dest=$2 filter
+fetch() { # <src> <dest> <attachment> [level]
+    local src=$1 dest=$2 attachment=$3 level=${4-} filter
     mkdir -p "$dest"
+
+    if ((MANIFEST_ONLY)); then
+        # Backfilling a directory that is already downloaded. Every figure in a manifest is
+        # read off the disk, so there is nothing to fetch to write one.
+        write_manifest "$dest" "$src" "$attachment" "$level"
+        return
+    fi
+
     mapfile -t filter < <(filters)
     # copy, never sync: a filtered run must not delete sheets fetched earlier.
     rclone --config "$CONFIG" copy "$src" "$dest" "${filter[@]}" \
         --transfers 8 --checkers 16 --retries 3 --progress
-    echo "$dest: $(find "$dest" -name '*.tiff' | wc -l) tiles"
+    write_manifest "$dest" "$src" "$attachment" "$level"
 }
 
 fetch_levels() { # <attachment> <level spec>...
@@ -88,7 +111,8 @@ fetch_levels() { # <attachment> <level spec>...
     for spec in "$@"; do
         read -r level src <<<"$spec"
         echo "== $attachment $level"
-        fetch "$src" "$DIR/source_data/auckland_west_south/$attachment/$level"
+        fetch "$src" "$DIR/source_data/auckland_west_south/$attachment/$level" \
+            "$attachment" "$level"
     done
 }
 
