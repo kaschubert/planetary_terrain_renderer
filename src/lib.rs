@@ -49,6 +49,7 @@ pub mod math;
 pub mod picking;
 pub mod plugin;
 pub mod preprocess;
+pub mod provenance;
 pub mod render;
 pub mod shaders;
 pub mod spawn;
@@ -69,6 +70,9 @@ pub mod prelude {
         math::{TerrainShape, TileCoordinate},
         picking::{PickingData, TerrainPickingPlugin},
         plugin::{TerrainPlugin, TerrainSettings},
+        provenance::{
+            MANIFEST_FILE, PROVENANCE_FILE, SourceManifest, SourceRecord, TerrainProvenance,
+        },
         // preprocess::{PreprocessDataset, Preprocessor, SphericalDataset, TerrainPreprocessPlugin},
         render::TerrainMaterialPlugin,
         spawn::SpawnTerrainCommandsExt,

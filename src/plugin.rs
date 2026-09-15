@@ -1,6 +1,7 @@
 use crate::{
     formats::TiffLoader,
     preprocess::{MipPipelines, initialize_mip_pipelines, mip_prepass},
+    provenance::TerrainProvenance,
     render::{
         GpuTerrain, GpuTerrainView, TerrainItem, TerrainTilingPrepassPipelines, TilingPrepassItem,
         extract_terrain_phases, initialize_depth_copy_pipeline,
@@ -66,7 +67,9 @@ impl Plugin for TerrainPlugin {
         app.add_plugins(BigSpaceDefaultPlugins);
 
         app.add_plugins(RonAssetPlugin::<TerrainConfig>::new(&["tc.ron"]))
+            .add_plugins(RonAssetPlugin::<TerrainProvenance>::new(&["tp.ron"]))
             .init_asset::<TerrainConfig>()
+            .init_asset::<TerrainProvenance>()
             .init_resource::<InternalShaders>()
             .init_resource::<TerrainViewComponents<TileTree>>()
             .init_resource::<CullingCamera>()
