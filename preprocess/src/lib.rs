@@ -108,7 +108,15 @@ pub fn preprocess(src_dataset: Dataset, context: &mut PreprocessContext) {
 fn save_terrain_config(tiles: Vec<TileCoordinate>, context: &PreprocessContext) {
     let file_path = context.terrain_path.join("config.tc.ron");
 
-    let mut config = TerrainConfig::load_file(&file_path).unwrap_or_default();
+    // Only a missing file starts from a default. A file that is there and will not parse
+    // has to stop the run: this run fills in its own attachment alone, so defaulting here
+    // would drop the other run's tiles and lod count on the floor, silently, and the
+    // terrain directory is not in version control to restore from.
+    let mut config = match TerrainConfig::load_file(&file_path) {
+        Ok(config) => config,
+        Err(_) if !file_path.exists() => TerrainConfig::default(),
+        Err(error) => panic!("{}: {error}", file_path.display()),
+    };
 
     config.shape = TerrainShape::WGS84;
     config.path = context.terrain_path.to_str().unwrap().to_string();
