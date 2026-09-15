@@ -60,10 +60,6 @@ fn main() {
     preprocess(src_dataset, &mut context);
 
     let args = Cli {
-        // Both levels feed the one attachment, coarser first so the finer one wins where
-        // they overlap: gdalbuildvrt draws later sources on top. The 0.075 m survey covers
-        // 394 km2 of the default sheet's 864, the 0.5 m mosaic 691, and the grid this
-        // terrain samples is around 0.6 m either way. The coarse imagery is from
         // Every level feeds the one attachment, coarsest first so the finest wins wherever
         // it exists: gdalbuildvrt draws later sources on top. The 2010 mosaic covers all
         // three sheets, the 2024 0.25 m survey the outer two where it was flown, and only
