@@ -82,6 +82,8 @@ using only the mouse.
 
 - `F1` - toggle this list of controls inside the app
 - `F2` - toggle the table of where each terrain's data came from
+- `F3` - toggle the Topo50 sheet grid over the terrain, coloured by the finest imagery downloaded, as does `show grid` in the F2 panel
+- Mouse wheel - raise or lower the sheet grid, once `wheel sets height` is ticked in the F2 panel
 - `W` - toggle wireframe view
 - `L` - toggle terrain data LOD view
 - `Y` - toggle terrain geometry LOD view
