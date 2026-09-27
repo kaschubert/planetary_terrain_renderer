@@ -210,6 +210,8 @@ fn hotkey_list_text() -> String {
 fn spawn_hotkey_list(mut commands: Commands) {
     commands.spawn((
         HotkeyList,
+        // Off until asked for; F1 brings it up.
+        Visibility::Hidden,
         Text::new(hotkey_list_text()),
         TextFont {
             font_size: FontSize::Px(13.0),
