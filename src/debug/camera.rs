@@ -1,3 +1,4 @@
+use crate::debug::PointerCapture;
 use bevy::{input::mouse::MouseMotion, math::DVec3, prelude::*};
 use big_space::{prelude::*, world_query::CellTransformItem};
 
@@ -45,6 +46,7 @@ pub fn debug_camera_controller(
     time: Res<Time>,
     keyboard: Res<ButtonInput<KeyCode>>,
     mut mouse_move: MessageReader<MouseMotion>,
+    capture: Res<PointerCapture>,
     mut camera: Query<(Entity, CellTransform, &mut DebugCameraController)>,
 ) {
     let Ok((
@@ -70,7 +72,15 @@ pub fn debug_camera_controller(
     }
 
     let mut translation_direction = DVec3::ZERO; // x: left/right, y: up/down, z: forward/backward
-    let rotation_direction = mouse_move.read().map(|m| -m.delta).sum::<Vec2>(); // x: yaw, y: pitch, z: roll
+    // x: yaw, y: pitch, z: roll. Not while the UI has the pointer: dragging a slider is
+    // not a look around. The motion is dropped rather than left queued, or it would all
+    // land at once the moment the pointer came back.
+    let rotation_direction = if capture.blocks_pointer() {
+        mouse_move.clear();
+        Vec2::ZERO
+    } else {
+        mouse_move.read().map(|m| -m.delta).sum::<Vec2>()
+    };
     let mut acceleration = 0.0;
 
     keyboard

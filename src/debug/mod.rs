@@ -16,9 +16,15 @@ use big_space::prelude::{CellCoord, Grids};
 mod approximation_debug;
 mod camera;
 mod orbital_camera;
+mod pointer_capture;
 
-pub(crate) use self::{approximation_debug::*, camera::*, orbital_camera::*};
-pub use self::{camera::DebugCameraController, orbital_camera::OrbitalCameraController};
+pub(crate) use self::{
+    approximation_debug::*, camera::*, orbital_camera::*, pointer_capture::track_pointer_capture,
+};
+pub use self::{
+    camera::DebugCameraController, orbital_camera::OrbitalCameraController,
+    pointer_capture::PointerCapture,
+};
 
 #[cfg(feature = "metal_capture")]
 mod metal_capture;
@@ -37,6 +43,7 @@ impl Plugin for TerrainDebugPlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<DebugTerrain>()
             .init_resource::<LoadingImages>()
+            .init_resource::<PointerCapture>()
             .add_systems(Startup, (debug_lighting, debug_window))
             .add_systems(
                 Update,
@@ -45,8 +52,14 @@ impl Plugin for TerrainDebugPlugin {
                     update_terrain_parameter,
                     update_view_parameter,
                     finish_loading_images,
-                    orbital_camera_controller,
-                    debug_camera_controller,
+                    // The controllers ask whether the UI has the pointer, so it has to be
+                    // answered first.
+                    (
+                        track_pointer_capture,
+                        orbital_camera_controller,
+                        debug_camera_controller,
+                    )
+                        .chain(),
                     detach_culling_camera,
                 ),
             )

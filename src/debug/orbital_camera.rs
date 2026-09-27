@@ -1,3 +1,4 @@
+use crate::debug::PointerCapture;
 use crate::picking::PickingData;
 use bevy::{
     color::palettes::basic,
@@ -94,6 +95,7 @@ pub fn orbital_camera_controller(
     keyboard: Res<ButtonInput<KeyCode>>,
     mouse_buttons: Res<ButtonInput<MouseButton>>,
     mouse_move: Res<AccumulatedMouseMotion>,
+    capture: Res<PointerCapture>,
     mut camera: Query<(
         Entity,
         &mut Transform,
@@ -136,7 +138,7 @@ pub fn orbital_camera_controller(
     let mut update_cursor_coords = true;
 
     if mouse_buttons.pressed(MouseButton::Left) {
-        if controller.pan_data.is_none() && cursor_position.is_some() {
+        if controller.pan_data.is_none() && cursor_position.is_some() && !capture.blocks_pointer() {
             controller.anchor_position = cursor_position.unwrap();
             controller.anchor_cell = cursor_cell;
             controller.camera_position = camera_position;
@@ -155,7 +157,10 @@ pub fn orbital_camera_controller(
     }
 
     if mouse_buttons.pressed(MouseButton::Middle) {
-        if controller.rotation_data.is_none() && cursor_position.is_some() {
+        if controller.rotation_data.is_none()
+            && cursor_position.is_some()
+            && !capture.blocks_pointer()
+        {
             controller.anchor_position = cursor_position.unwrap();
             controller.anchor_cell = cursor_cell;
             controller.camera_position = camera_position;
@@ -187,7 +192,8 @@ pub fn orbital_camera_controller(
     }
 
     if mouse_buttons.pressed(MouseButton::Right) {
-        if controller.zoom_data.is_none() && cursor_position.is_some() {
+        if controller.zoom_data.is_none() && cursor_position.is_some() && !capture.blocks_pointer()
+        {
             controller.anchor_position = cursor_position.unwrap();
             controller.anchor_cell = cursor_cell;
             controller.camera_position = camera_position;

@@ -65,7 +65,7 @@ pub mod prelude {
     pub use crate::{
         debug::{
             DebugCameraController, DebugTerrainMaterial, LoadingImages, OrbitalCameraController,
-            TerrainDebugPlugin,
+            PointerCapture, TerrainDebugPlugin,
         },
         math::{TerrainShape, TileCoordinate},
         picking::{PickingData, TerrainPickingPlugin},
