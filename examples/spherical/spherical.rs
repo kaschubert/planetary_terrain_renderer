@@ -179,7 +179,7 @@ struct VramUsage {
 
 /// The README is the one place the controls are written down, so the in-app list is
 /// rendered from it rather than kept as a second copy that could drift.
-const README: &str = include_str!("../README.md");
+const README: &str = include_str!("../../README.md");
 
 #[derive(Component)]
 struct HotkeyList;

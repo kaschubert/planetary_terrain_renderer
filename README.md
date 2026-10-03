@@ -47,7 +47,7 @@ and the framework is evaluated using multiple datasets.
 To try out the terrain renderer, you first have to preprocess your dataset (GeoTIFF).
 Some example datasets are available [here](https://drive.proton.me/urls/ZRDAC9SWTM#IxwKkKWSBgnV).
 Use the preprocess CLI or a prepared configuration in the `preprocess/examples` directory.
-Then run the `examples/spherical.rs` demo with the preprocessed dataset selected.
+Then run the `examples/spherical/spherical.rs` demo with the preprocessed dataset selected.
 The default path for the datasets is `source_data`.
 
 ## Run exclusively on Vulkan

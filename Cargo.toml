@@ -55,9 +55,9 @@ arboard = "3.6"
 
 [[example]]
 name = "spherical"
-path = "examples/spherical.rs"
+path = "examples/spherical/spherical.rs"
 
 [[example]]
 name = "precision_demo"
-path = "examples/precision_demo.rs"
+path = "examples/precision/precision_demo.rs"
 required-features = ["rand"]
