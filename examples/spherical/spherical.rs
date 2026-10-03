@@ -10,6 +10,9 @@ use bevy_terrain::math::Coordinate;
 use bevy_terrain::prelude::*;
 use big_space::prelude::{CellCoord, Grids};
 use std::sync::Arc;
+
+mod sheet_grid;
+use sheet_grid::{SheetGridControls, SheetGridPlugin};
 use std::sync::atomic::{AtomicU64, Ordering};
 
 const RADIUS: f64 = 6371000.0;
@@ -145,6 +148,7 @@ fn main() {
             FpsOverlayPlugin::default(), // frame rate and frame time graph, top left
             VramUsagePlugin,             // gpu allocator usage, below the fps overlay
             ProvenancePlugin,            // where each terrain's pixels came from, top right
+            SheetGridPlugin,             // the Topo50 sheets over the terrain, coloured by coverage
             TerrainPickingPlugin,
         ))
         // A terrain costs roughly 2.6 MiB per atlas slot, for height and albedo together,
@@ -633,8 +637,13 @@ impl Plugin for ProvenancePlugin {
     }
 }
 
+/// The F2 panel: a row of controls, then the table.
 #[derive(Component)]
 struct ProvenancePanel;
+
+/// The table itself, rebuilt as provenance arrives.
+#[derive(Component)]
+struct ProvenanceGrid;
 
 #[derive(Resource, Default)]
 struct ProvenanceTable {
@@ -729,15 +738,35 @@ fn spawn_provenance_table(mut commands: Commands) {
             // Opposite side to the hotkey list, which is long enough to run most of the
             // way down the left.
             right: Val::Px(6.0),
-            display: Display::Grid,
-            grid_template_columns: RepeatedGridTrack::auto(PROVENANCE_COLUMNS.len() as u16),
-            column_gap: Val::Px(12.0),
-            row_gap: Val::Px(2.0),
+            flex_direction: FlexDirection::Column,
+            row_gap: Val::Px(8.0),
             padding: UiRect::all(Val::Px(6.0)),
             ..default()
         },
         BackgroundColor(Color::srgba(0.0, 0.0, 0.0, 0.5)),
         Visibility::Hidden,
+        children![
+            // The sheet grid's height controls, filled in by its plugin.
+            (
+                SheetGridControls,
+                Node {
+                    flex_direction: FlexDirection::Row,
+                    align_items: AlignItems::Center,
+                    column_gap: Val::Px(10.0),
+                    ..default()
+                },
+            ),
+            (
+                ProvenanceGrid,
+                Node {
+                    display: Display::Grid,
+                    grid_template_columns: RepeatedGridTrack::auto(PROVENANCE_COLUMNS.len() as u16),
+                    column_gap: Val::Px(12.0),
+                    row_gap: Val::Px(2.0),
+                    ..default()
+                },
+            ),
+        ],
     ));
 }
 
@@ -745,7 +774,7 @@ fn rebuild_provenance_table(
     mut commands: Commands,
     mut table: ResMut<ProvenanceTable>,
     provenance: Res<Assets<TerrainProvenance>>,
-    panel: Single<Entity, With<ProvenancePanel>>,
+    panel: Single<Entity, With<ProvenanceGrid>>,
 ) {
     table.dirty = false;
 
