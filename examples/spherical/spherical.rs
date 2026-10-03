@@ -7,9 +7,11 @@ use bevy_terrain::math::Coordinate;
 use bevy_terrain::prelude::*;
 use big_space::prelude::{CellCoord, Grids};
 
+mod auckland_rail;
 mod provenance;
 mod sheet_grid;
 mod vram_usage;
+use auckland_rail::AucklandRailPlugin;
 use provenance::ProvenancePlugin;
 use sheet_grid::SheetGridPlugin;
 use vram_usage::VramUsagePlugin;
@@ -148,6 +150,7 @@ fn main() {
             VramUsagePlugin,             // gpu allocator usage, below the fps overlay
             ProvenancePlugin,            // where each terrain's pixels came from, top right
             SheetGridPlugin,             // the Topo50 sheets over the terrain, coloured by coverage
+            AucklandRailPlugin,          // the rail lines over Auckland, in AT's colours
             TerrainPickingPlugin,
         ))
         // A terrain costs roughly 2.6 MiB per atlas slot, for height and albedo together,
