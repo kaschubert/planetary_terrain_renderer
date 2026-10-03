@@ -45,7 +45,7 @@ impl Plugin for SheetGridPlugin {
                 (
                     spawn_sheet_labels,
                     // Into the row the provenance panel leaves for it.
-                    spawn_height_controls.after(super::spawn_provenance_table),
+                    spawn_height_controls.after(super::provenance::spawn_provenance_table),
                 ),
             )
             .add_systems(
