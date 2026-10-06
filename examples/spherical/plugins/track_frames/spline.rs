@@ -245,6 +245,18 @@ impl ArcLength {
         self.entries.last().map_or(0.0, |&(_, distance)| distance)
     }
 
+    /// The position on the spline at every entry of the table with the entry's distance, so
+    /// that a position off the spline can be matched to a distance along it: the chords
+    /// between these are the chords the distances were measured along, so a point dropped
+    /// onto one has its distance between the two entries' by where it lands, which is the
+    /// distance the table gives the same point.
+    pub(super) fn samples(&self, spline: &CatmullRom) -> Vec<(DVec3, f64)> {
+        self.entries
+            .iter()
+            .map(|&(t, distance)| (spline.position(t), distance))
+            .collect()
+    }
+
     /// The cursor to hand [`Self::parameter`] for a distance looked up on its own, rather
     /// than as the next of a walk: the subdivision the distance falls after, found by
     /// bisection, where the walk from a cursor of zero would step through the table from

@@ -27,15 +27,32 @@ fn the_speed_reads_in_whole_kilometres_per_hour() {
 }
 
 #[test]
-fn a_cell_is_its_column_and_the_name_is_folded_to_the_font() {
-    assert_eq!(cell_text(Column::Line, "S-C", 500.0, 1.0, 20.0), "S-C");
+fn a_cell_is_its_column_and_the_names_are_folded_to_the_font() {
+    let train = Train {
+        id: "AMP\u{00a0}1142".to_string(),
+        distance: 500.0,
+        direction: 1.0,
+        speed: 20.0,
+        ..Train::stand_in(0)
+    };
+    assert_eq!(cell_text(Column::Line, "S-C", &train), "S-C");
     assert_eq!(
-        cell_text(Column::Line, "Onehunga\u{2013}West", 500.0, 1.0, 20.0),
+        cell_text(Column::Line, "Onehunga\u{2013}West", &train),
         "Onehunga-West"
     );
-    assert_eq!(cell_text(Column::Km, "S-C", 500.0, 1.0, 20.0), "0.5");
-    assert_eq!(cell_text(Column::Dir, "S-C", 500.0, -1.0, 20.0), "<");
-    assert_eq!(cell_text(Column::Speed, "S-C", 500.0, 1.0, 20.0), "72");
+    assert_eq!(cell_text(Column::Unit, "S-C", &train), "AMP 1142");
+    assert_eq!(cell_text(Column::Km, "S-C", &train), "0.5");
+    assert_eq!(cell_text(Column::Speed, "S-C", &train), "72");
+
+    let back = Train {
+        direction: -1.0,
+        ..train
+    };
+    assert_eq!(cell_text(Column::Dir, "S-C", &back), "<");
+
+    // A stand-in has no unit, and the column is blank for it.
+    assert_eq!(cell_text(Column::Unit, "S-C", &Train::stand_in(0)), "");
+    assert_eq!(Column::ALL.len() + 1, HEADINGS.len());
 }
 
 #[test]

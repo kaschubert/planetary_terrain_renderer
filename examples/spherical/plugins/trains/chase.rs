@@ -155,8 +155,10 @@ impl Orbit {
 /// reset to it but for the train.
 #[derive(Resource, Default)]
 pub struct ChaseCamera {
-    /// The index into Trains::trains of the train followed, None when the camera is free.
-    pub following: Option<usize>,
+    /// The carriage entity of the train followed, None when the camera is free. The entity
+    /// and not the index into Trains::trains: the live feed adds and removes trains, and the
+    /// indices shift under a train that is still there.
+    pub following: Option<Entity>,
     /// Where the eye sits round the carriage, which the mouse moves.
     pub orbit: Orbit,
     /// The heading the pose is built on, smoothed towards the carriage frame's rotation, see
@@ -186,7 +188,7 @@ pub struct Touch {
     /// F7 has hidden the trains, or F4 the network and the carriages with it; the table has
     /// gone with them either way.
     pub trains_hidden: bool,
-    /// The followed index names no train.
+    /// No train has the followed carriage any more.
     pub train_gone: bool,
     /// The camera is not where the chase left it, so something else has moved it.
     pub moved_elsewhere: bool,
@@ -215,9 +217,9 @@ pub fn reason_to_let_go(touch: Touch) -> Option<&'static str> {
     }
 }
 
-/// What a click on a train's icon does: follows that train, or lets go when it is the train
-/// already followed, so the one icon is both the switch on and the switch off.
-pub fn follow_or_let_go(following: Option<usize>, clicked: usize) -> Option<usize> {
+/// What a click on a train's icon does: follows that train's carriage, or lets go when it is
+/// the one already followed, so the one icon is both the switch on and the switch off.
+pub fn follow_or_let_go(following: Option<Entity>, clicked: Entity) -> Option<Entity> {
     if following == Some(clicked) {
         None
     } else {
@@ -287,7 +289,8 @@ fn let_go(chase: &mut ChaseCamera, orbital: &mut OrbitalCameraController, hand_b
 
 /// A press on a train's icon follows that train, or lets go of it when it is the one
 /// followed. Attaching takes the view from both controllers, see the module doc, and starts
-/// the orbit straight behind with no heading and no pose, so the first frame snaps.
+/// the orbit straight behind with no heading and no pose, so the first frame snaps. A press
+/// on the row of a train whose carriage is not spawned yet does nothing.
 fn press_follow_buttons(
     buttons: Query<(&FollowButton, &Interaction), Changed<Interaction>>,
     mut chase: ResMut<ChaseCamera>,
@@ -300,12 +303,18 @@ fn press_follow_buttons(
         if *interaction != Interaction::Pressed {
             continue;
         }
+        let Some(train) = trains.trains.get(button.0) else {
+            continue;
+        };
+        let Some(carriage) = train.entity else {
+            continue;
+        };
         let Ok(mut orbital) = orbital.single_mut() else {
             return;
         };
 
-        match follow_or_let_go(chase.following, button.0) {
-            Some(index) => {
+        match follow_or_let_go(chase.following, carriage) {
+            Some(carriage) => {
                 // Switching trains keeps what was found at the first attach, since the
                 // controller is off now by the chase's own hand.
                 let orbital_was_on = if chase.following.is_some() {
@@ -314,7 +323,7 @@ fn press_follow_buttons(
                     orbital.enabled
                 };
                 *chase = ChaseCamera {
-                    following: Some(index),
+                    following: Some(carriage),
                     orbital_was_on,
                     ..default()
                 };
@@ -322,12 +331,9 @@ fn press_follow_buttons(
                 for mut fly in &mut fly {
                     fly.enabled = false;
                 }
-                let name = trains
-                    .trains
-                    .get(index)
-                    .and_then(|train| train.line(&rail))
-                    .map_or_else(|| index.to_string(), |line| ascii(&line.name));
-                info!("trains: chase camera on the {name} train");
+                let name = ascii(train.line_name(&rail));
+                let unit = ascii(&train.id);
+                info!("trains: chase camera on the {name} train {unit}");
             }
             None => {
                 let_go(&mut chase, &mut orbital, true);
@@ -361,7 +367,7 @@ fn follow_train(
         &mut OrbitalCameraController,
     )>,
 ) {
-    let Some(index) = chase.following else {
+    let Some(following) = chase.following else {
         return;
     };
     let Ok((entity, mut transform, mut cell, mut orbital)) = camera.single_mut() else {
@@ -370,6 +376,10 @@ fn follow_train(
     let Some(grid) = grids.parent_grid(entity) else {
         return;
     };
+    let train = trains
+        .trains
+        .iter()
+        .find(|train| train.entity == Some(following));
 
     // Where the camera is now against where the chase left it, in f64 as the orbital
     // camera reads its own; nothing to compare on the frame of attaching.
@@ -395,7 +405,7 @@ fn follow_train(
         orbital_toggled: keys.just_pressed(KeyCode::KeyR),
         escape: keys.just_pressed(KeyCode::Escape),
         trains_hidden: !trains.drawn(&rail),
-        train_gone: index >= trains.trains.len(),
+        train_gone: train.is_none(),
         moved_elsewhere,
     };
     if let Some(reason) = reason_to_let_go(touch) {
@@ -403,6 +413,9 @@ fn follow_train(
         info!("trains: chase camera let go, {reason}");
         return;
     }
+    let Some(train) = train else {
+        return;
+    };
 
     // A drag begun over the terrain turns or zooms the orbit until its button is let go,
     // wherever the pointer wanders meanwhile; one begun over the UI is a click on something
@@ -433,7 +446,6 @@ fn follow_train(
         chase.orbit.zoom(-notches as f64 * ZOOM_PER_NOTCH);
     }
 
-    let train = &trains.trains[index];
     let Some(spline) = splines.splines.get(train.line).and_then(Option::as_ref) else {
         return;
     };

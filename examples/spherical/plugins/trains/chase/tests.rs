@@ -214,9 +214,12 @@ fn any_one_touch_lets_go_for_its_own_reason_and_none_keeps_following() {
 
 #[test]
 fn the_icon_follows_its_train_and_lets_go_of_the_train_already_followed() {
-    assert_eq!(follow_or_let_go(None, 2), Some(2));
-    assert_eq!(follow_or_let_go(Some(1), 2), Some(2));
-    assert_eq!(follow_or_let_go(Some(2), 2), None);
+    let mut world = World::new();
+    let (one, two) = (world.spawn_empty().id(), world.spawn_empty().id());
+
+    assert_eq!(follow_or_let_go(None, two), Some(two));
+    assert_eq!(follow_or_let_go(Some(one), two), Some(two));
+    assert_eq!(follow_or_let_go(Some(two), two), None);
 }
 
 /// The default orbit is CHASE_BACK behind and CHASE_UP above. A quarter turn to the right

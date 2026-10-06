@@ -9,11 +9,9 @@ use crate::plugins::track_frames::tests::{eastward, quarter_circle};
 /// A train on the first line at a distance, heading as given.
 fn train(distance: f64, direction: f64) -> Train {
     Train {
-        line: 0,
         distance,
         direction,
-        entity: None,
-        label: None,
+        ..Train::stand_in(0)
     }
 }
 

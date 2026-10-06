@@ -5,10 +5,12 @@
 //! The table is built in the style of the F2 provenance table, a grid of text cells under a
 //! row of headings with a rule beneath them, and shows exactly while the carriages do, see
 //! Trains::drawn, so F7 takes the two away together and F4, which hides the network, takes
-//! them with it. The rows are rebuilt whenever the count of trains is not the count of rows,
-//! which is once, on the first frame, unless a later driver adds a train. The text cells are
-//! refreshed every frame the table shows, each written only when its string has changed, as
-//! the editor's readout is.
+//! them with it. The rows are rebuilt whenever the count of trains is not the count of rows
+//! or the roster has changed since they were built, see Trains::roster: once, on the first
+//! frame, and whenever the live feed adds or removes a train. The text cells are refreshed
+//! every frame the table shows, each written only when its string has changed, as the
+//! editor's readout is. Above the headings is the caption the driver sets, see
+//! Trains::caption, shown while it has something to say.
 //!
 //! The bundled font covers printable ASCII only, so the camera icon is drawn from UI nodes
 //! rather than a glyph: a rounded body, a round lens in it and a viewfinder bump on its top
@@ -16,8 +18,8 @@
 //! the colour, grey when idle, brighter under the pointer and the line's own colour while
 //! that train is followed; the lens stays dark against whichever.
 
-use super::Trains;
 use super::chase::ChaseCamera;
+use super::{Train, Trains};
 use crate::plugins::auckland_rail::{AucklandRail, line_colour};
 use crate::plugins::provenance::ascii;
 use bevy::ecs::relationship::RelatedSpawnerCommands;
@@ -36,6 +38,7 @@ impl Plugin for TrainsTablePlugin {
                 // After the trains have moved this frame, so the distance read is where
                 // the carriage is drawn.
                 refresh_table.after(super::drive_trains),
+                refresh_caption,
                 colour_follow_buttons,
             )
                 .chain(),
@@ -48,7 +51,10 @@ const MARGIN: f32 = 6.0;
 
 /// The column headings, in order. The last is the camera icon's, which needs no word: the
 /// icon says what it is, and the README says what it does.
-const HEADINGS: [&str; 5] = ["line", "km", "dir", "km/h", ""];
+const HEADINGS: [&str; 6] = ["line", "unit", "km", "dir", "km/h", ""];
+
+/// The headings' colour, and the caption's: the provenance table's heading blue.
+const HEADING_COLOUR: Color = Color::srgb(0.65, 0.8, 1.0);
 
 /// The icon's geometry, in pixels: the body with its corner radius, the lens across, the
 /// viewfinder bump above the body and how far in from the body's left edge it sits, and the
@@ -76,9 +82,16 @@ const FOLLOWED_HOVER_LIGHTER: f32 = 0.15;
 #[derive(Component)]
 struct TrainsTable;
 
-/// The grid the rows are built into.
+/// The grid the rows are built into, and the roster they were built for, None before the
+/// first build; see rows_stale.
 #[derive(Component)]
-struct TrainsGrid;
+struct TrainsGrid {
+    roster: Option<u64>,
+}
+
+/// The caption above the grid, see Trains::caption.
+#[derive(Component)]
+struct TrainsCaption;
 
 /// A text cell: which train's and which column.
 #[derive(Component, Clone, Copy)]
@@ -99,9 +112,21 @@ struct IconFill;
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Column {
     Line,
+    Unit,
     Km,
     Dir,
     Speed,
+}
+
+impl Column {
+    /// Every text column, in the order of HEADINGS.
+    pub const ALL: [Column; 5] = [
+        Column::Line,
+        Column::Unit,
+        Column::Km,
+        Column::Dir,
+        Column::Speed,
+    ];
 }
 
 /// Kilometres along the line to one decimal: a hundred metres is as fine as the eye tells
@@ -121,13 +146,15 @@ pub fn speed_text(speed: f64) -> String {
     format!("{:.0}", speed * 3.6)
 }
 
-/// A text cell's string, the line's name folded to the font as the editor's panel folds it.
-pub fn cell_text(column: Column, name: &str, distance: f64, direction: f64, speed: f64) -> String {
+/// A text cell's string: the line's name folded to the font as the editor's panel folds it,
+/// the train's id folded the same way, since it comes from the feed, and its numbers.
+pub fn cell_text(column: Column, name: &str, train: &Train) -> String {
     match column {
         Column::Line => ascii(name),
-        Column::Km => km_text(distance),
-        Column::Dir => dir_text(direction).to_string(),
-        Column::Speed => speed_text(speed),
+        Column::Unit => ascii(&train.id),
+        Column::Km => km_text(train.distance),
+        Column::Dir => dir_text(train.direction).to_string(),
+        Column::Speed => speed_text(train.speed),
     }
 }
 
@@ -159,21 +186,37 @@ fn spawn_table(mut commands: Commands) {
             bottom: Val::Px(MARGIN),
             left: Val::Px(MARGIN),
             padding: UiRect::all(Val::Px(MARGIN)),
+            flex_direction: FlexDirection::Column,
+            row_gap: Val::Px(4.0),
             ..default()
         },
         BackgroundColor(Color::srgba(0.0, 0.0, 0.0, 0.5)),
         Visibility::Hidden,
-        children![(
-            TrainsGrid,
-            Node {
-                display: Display::Grid,
-                grid_template_columns: RepeatedGridTrack::auto(HEADINGS.len() as u16),
-                column_gap: Val::Px(12.0),
-                row_gap: Val::Px(2.0),
-                align_items: AlignItems::Center,
-                ..default()
-            },
-        )],
+        children![
+            (
+                TrainsCaption,
+                TextLayout::new(Justify::Left, LineBreak::NoWrap),
+                Text::default(),
+                font(),
+                TextColor(HEADING_COLOUR),
+                // Nothing to say yet; refresh_caption shows it when there is.
+                Node {
+                    display: Display::None,
+                    ..default()
+                },
+            ),
+            (
+                TrainsGrid { roster: None },
+                Node {
+                    display: Display::Grid,
+                    grid_template_columns: RepeatedGridTrack::auto(HEADINGS.len() as u16),
+                    column_gap: Val::Px(12.0),
+                    row_gap: Val::Px(2.0),
+                    align_items: AlignItems::Center,
+                    ..default()
+                },
+            )
+        ],
     ));
 }
 
@@ -264,9 +307,18 @@ fn show_table(
     }
 }
 
-/// Whether there is a row for every train and no more: one icon per row.
-fn rows_stale(trains: Res<Trains>, buttons: Query<&FollowButton>) -> bool {
+/// Whether the rows are for the trains there are: one icon per train, and built for this
+/// roster. A live train replaced by another in the same frame leaves the count alone but
+/// not the roster, and its row's line colour would be the old train's.
+fn rows_stale(
+    trains: Res<Trains>,
+    buttons: Query<&FollowButton>,
+    grid: Query<&TrainsGrid>,
+) -> bool {
     trains.trains.len() != buttons.iter().len()
+        || grid
+            .single()
+            .is_ok_and(|grid| grid.roster != Some(trains.roster))
 }
 
 /// Builds the headings, the rule under them and a row per train, from scratch: the rows are
@@ -275,17 +327,18 @@ fn build_rows(
     mut commands: Commands,
     trains: Res<Trains>,
     rail: Res<AucklandRail>,
-    grid: Query<Entity, With<TrainsGrid>>,
+    mut grid: Query<(Entity, &mut TrainsGrid)>,
 ) {
-    let Ok(grid) = grid.single() else {
+    let Ok((grid, mut built)) = grid.single_mut() else {
         return;
     };
+    built.roster = Some(trains.roster);
     let mut grid = commands.entity(grid);
     grid.despawn_children();
 
     grid.with_children(|grid| {
         for heading in HEADINGS {
-            spawn_cell(grid, heading, Color::srgb(0.65, 0.8, 1.0));
+            spawn_cell(grid, heading, HEADING_COLOUR);
         }
         // A rule under the headings, spanning every column. Grid lines are 1 indexed.
         grid.spawn((
@@ -301,8 +354,8 @@ fn build_rows(
             let name = train.line_name(&rail);
             let colour = line_colour(name);
 
-            for column in [Column::Line, Column::Km, Column::Dir, Column::Speed] {
-                let text = cell_text(column, name, train.distance, train.direction, trains.speed);
+            for column in Column::ALL {
+                let text = cell_text(column, name, train);
                 let text_colour = if column == Column::Line {
                     colour
                 } else {
@@ -334,15 +387,31 @@ fn refresh_table(
         let Some(train) = trains.trains.get(cell.train) else {
             continue;
         };
-        let wanted = cell_text(
-            cell.column,
-            train.line_name(&rail),
-            train.distance,
-            train.direction,
-            trains.speed,
-        );
+        let wanted = cell_text(cell.column, train.line_name(&rail), train);
         if text.0 != wanted {
             text.0 = wanted;
+        }
+    }
+}
+
+/// Shows the driver's caption above the headings while it has one, folded to the font as the
+/// cells are, and takes the line away when it is empty, so the headings sit at the top.
+fn refresh_caption(
+    trains: Res<Trains>,
+    mut caption: Query<(&mut Text, &mut Node), With<TrainsCaption>>,
+) {
+    for (mut text, mut node) in &mut caption {
+        let wanted = ascii(&trains.caption);
+        if text.0 != wanted {
+            text.0 = wanted;
+        }
+        let display = if trains.caption.is_empty() {
+            Display::None
+        } else {
+            Display::Flex
+        };
+        if node.display != display {
+            node.display = display;
         }
     }
 }
@@ -362,12 +431,11 @@ fn colour_follow_buttons(
         let Ok((button, interaction)) = buttons.get(child_of.parent()) else {
             continue;
         };
-        let followed = (chase.following == Some(button.0)).then(|| {
-            trains
-                .trains
-                .get(button.0)
-                .map_or(Color::WHITE, |train| line_colour(train.line_name(&rail)))
-        });
+        let followed = trains
+            .trains
+            .get(button.0)
+            .filter(|train| train.entity.is_some() && train.entity == chase.following)
+            .map(|train| line_colour(train.line_name(&rail)));
         background.set_if_neq(BackgroundColor(icon_colour(*interaction, followed)));
     }
 }

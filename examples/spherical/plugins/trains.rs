@@ -5,9 +5,12 @@
 //! driver moves the distance on at a steady speed and turns the train round at either end;
 //! the placer asks the spline for the frame at that distance and stands the carriage there,
 //! on the left-hand running line as New Zealand's trains keep, facing the way it is going.
-//! The two are kept apart so that the driver can be replaced by one that heads for the
-//! position Auckland Transport's feed last reported, which is a distance along the line too,
-//! without the placing changing.
+//! The two are kept apart so that another driver can take the trains over without the
+//! placing changing: live_trains.rs does, standing a carriage for every train Auckland
+//! Transport's feed reports at the distance along its line the feed last put it, and this
+//! driver stands aside while it has them, see Trains::live. Such a driver adds and removes
+//! trains as the feed does, through Trains::add and Trains::remove, which is why a train
+//! carries an id and the chase camera follows an entity and not an index.
 //!
 //! The carriage is a glTF model of one car, spawned once per train as a spatial entity under
 //! the big_space root, so that it is placed as the lines are, by a cell and a transform
@@ -17,10 +20,12 @@
 //! are. F7 hides the lot; the trains drive on hidden, so they come back where they would
 //! have been.
 //!
-//! A table in the bottom left corner lists the trains, where each is along its line and
-//! which way it is running, with a camera icon on every row that puts a chase camera behind
-//! that train; the table is in table.rs and the camera in chase.rs. Both read the trains
-//! and place by carriage_frame, so the table, the camera and the carriage agree.
+//! A table in the bottom left corner lists the trains, where each is along its line, which
+//! way it is running and how fast, and which unit it is when a feed has said, with a camera
+//! icon on every row that puts a chase camera behind that train; the table is in table.rs
+//! and the camera in chase.rs. Both read the trains and place by carriage_frame, so the
+//! table, the camera and the carriage agree. Above the table's headings stands whatever
+//! caption the driver has set, which is where the live feed says how it is doing.
 
 use super::auckland_rail::{AucklandRail, line_colour};
 use super::shared::rail_network::RailLine;
@@ -112,10 +117,20 @@ pub struct Trains {
     /// Shown only while the lines are, as the frames and the discs are: F4 hides everything
     /// on the network.
     pub shown: bool,
-    /// Metres per second, for every train: TRAIN_SPEED.
+    /// Metres per second, for every stand-in: TRAIN_SPEED.
     pub speed: f64,
-    /// One per line, in the network's order, from start_trains.
+    /// One stand-in per line, in the network's order, from start_trains, until another
+    /// driver replaces them with trains of its own, see live.
     pub trains: Vec<Train>,
+    /// Set by a driver that has taken the trains over, the live feed in live_trains.rs:
+    /// drive_trains stands aside while it is, and the other driver moves the trains.
+    pub live: bool,
+    /// Counts the changes to which trains there are: add, remove and reset each bump it, so
+    /// the table knows its rows are for other trains even when the count is the same.
+    pub roster: u64,
+    /// A line above the table's headings, the driver's word on itself: the live feed's
+    /// count and age, or why there is no feed. Nothing shows nothing.
+    pub caption: String,
 }
 
 impl Default for Trains {
@@ -124,6 +139,9 @@ impl Default for Trains {
             shown: true,
             speed: TRAIN_SPEED,
             trains: Vec::new(),
+            live: false,
+            roster: 0,
+            caption: String::new(),
         }
     }
 }
@@ -134,18 +152,62 @@ impl Trains {
     pub fn drawn(&self, rail: &AucklandRail) -> bool {
         self.shown && rail.visible
     }
+
+    /// Adds a train at the end of the roster. Its carriage and label are spawned by
+    /// spawn_carriages on the next frame, as the stand-ins' are on the first.
+    pub fn add(&mut self, train: Train) {
+        self.trains.push(train);
+        self.roster += 1;
+    }
+
+    /// Takes a train out of the roster, with its carriage, the model under it and its label.
+    /// The trains after it move up one, which is why nothing holds an index across a frame.
+    pub fn remove(&mut self, index: usize, commands: &mut Commands) {
+        if index >= self.trains.len() {
+            return;
+        }
+        let train = self.trains.remove(index);
+        for entity in [train.entity, train.label].into_iter().flatten() {
+            commands.entity(entity).despawn();
+        }
+        self.roster += 1;
+    }
+
+    /// Takes every train out, see remove.
+    pub fn clear(&mut self, commands: &mut Commands) {
+        while !self.trains.is_empty() {
+            self.remove(self.trains.len() - 1, commands);
+        }
+    }
+
+    /// One stand-in per line, at the line's first point heading along it, in place of
+    /// whatever trains there were. The lines are never added or removed by the editor, so
+    /// this is once at startup, and again whenever the live feed is switched off.
+    pub fn reset_stand_ins(&mut self, rail: &AucklandRail, commands: &mut Commands) {
+        self.clear(commands);
+        for line in 0..rail.network.lines.len() {
+            self.add(Train::stand_in(line));
+        }
+    }
 }
 
 /// One train: where it is on its line and which way it is going. What a driver sets, this
 /// one or a live feed's, and what the placer reads.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Train {
+    /// Which train this is, for a driver that is told about trains by name: the unit's
+    /// label from Auckland Transport's feed, "AMP 1142", or its vehicle id where the label
+    /// is blank. Empty for a stand-in, which no feed names. The table shows it.
+    pub id: String,
     /// Index into the network's lines, which the editor never reorders.
     pub line: usize,
     /// Metres along the line's spline from its first point, see TrackSpline::frame_at.
     pub distance: f64,
     /// +1 running in point order, towards the line's last point; -1 running back.
     pub direction: f64,
+    /// Metres per second, for the table: TRAIN_SPEED for a stand-in, or the speed the feed
+    /// reported, which is nought for a train standing at a platform.
+    pub speed: f64,
     /// The carriage, once spawned: a spatial entity under the big_space root, whose cell and
     /// transform the placer writes. None until spawn_carriages has run, and for good where
     /// there is no camera to find the root by or no asset server, as in the headless test.
@@ -155,6 +217,19 @@ pub struct Train {
 }
 
 impl Train {
+    /// A stand-in on a line: at its first point, heading along it, at TRAIN_SPEED, unnamed.
+    pub fn stand_in(line: usize) -> Self {
+        Self {
+            id: String::new(),
+            line,
+            distance: 0.0,
+            direction: 1.0,
+            speed: TRAIN_SPEED,
+            entity: None,
+            label: None,
+        }
+    }
+
     /// The line the train runs on, or None should the index name none, which the editor
     /// never arranges: it neither adds lines nor removes them.
     pub fn line<'a>(&self, rail: &'a AucklandRail) -> Option<&'a RailLine> {
@@ -252,18 +327,10 @@ fn toggle_trains(keys: Res<ButtonInput<KeyCode>>, mut trains: ResMut<Trains>) {
     }
 }
 
-/// One train per line, at the line's first point heading along it. The lines are never
-/// added or removed by the editor, so once is enough.
-fn start_trains(rail: Res<AucklandRail>, mut trains: ResMut<Trains>) {
-    trains.trains = (0..rail.network.lines.len())
-        .map(|line| Train {
-            line,
-            distance: 0.0,
-            direction: 1.0,
-            entity: None,
-            label: None,
-        })
-        .collect();
+/// One stand-in per line, see Trains::reset_stand_ins. The live feed, when there is one,
+/// replaces them in PostStartup, before any carriage is spawned for them.
+fn start_trains(mut commands: Commands, rail: Res<AucklandRail>, mut trains: ResMut<Trains>) {
+    trains.reset_stand_ins(&rail, &mut commands);
 }
 
 fn carriages_missing(trains: Res<Trains>) -> bool {
@@ -336,15 +403,20 @@ fn spawn_carriages(
     }
 
     if spawned > 0 {
-        info!("trains: {spawned} carriages spawned, {CARRIAGE_LENGTH} m long at {TRAIN_SPEED} m/s");
+        info!("trains: {spawned} carriages spawned, {CARRIAGE_LENGTH} m long");
     }
 }
 
 /// Moves every train on by the frame's time at its speed, turning it round at either end of
 /// its line. A train whose line has no spline this frame, as on the frame after an insert
 /// or a delete, stays where it is; one whose line has shortened under it is brought back
-/// onto it, see advance.
-fn drive_trains(time: Res<Time>, splines: Res<TrackSplines>, mut trains: ResMut<Trains>) {
+/// onto it, see advance. Stands aside while another driver has the trains, see Trains::live.
+/// Public so that driver can order itself before this, and so the table can order itself
+/// after.
+pub fn drive_trains(time: Res<Time>, splines: Res<TrackSplines>, mut trains: ResMut<Trains>) {
+    if trains.live {
+        return;
+    }
     let speed = trains.speed;
     let dt = time.delta_secs_f64();
 
@@ -354,6 +426,7 @@ fn drive_trains(time: Res<Time>, splines: Res<TrackSplines>, mut trains: ResMut<
         };
         (train.distance, train.direction) =
             advance(train.distance, train.direction, speed, dt, spline.length());
+        train.speed = speed;
     }
 }
 

@@ -125,9 +125,10 @@ While editing, every point draws as a disc on its line: the line's colour for a 
 
 ### Trains
 
-One carriage per line drives itself along the drawn track, end to end and back at 72 km/h on the left-hand running line, with the line's name above it, as a stand-in until the live positions arrive. A table in the bottom left corner lists the trains, each with how far along its line it is in kilometres, which way it is running, `>` in the file's point order and `<` back, and its speed, and a camera icon on every row that puts a chase camera behind that train, 60 m back and 25 m up, looking a little ahead of it. While it rides, the mouse moves the camera round the train rather than the world.
+One carriage per line drives itself along the drawn track, end to end and back at 72 km/h on the left-hand running line, with the line's name above it, as a stand-in while there is no live feed. With `AT_API_KEY` set in the environment, a free key from a subscription on dev-portal.at.govt.nz, the carriages instead stand where Auckland Transport's realtime feed last reported each train on a trip, fetched every 10 seconds and run on between fetches at the speed each reported; a caption above the table says how many trains the feed has and how long ago it was fetched, or why there is no feed. A table in the bottom left corner lists the trains, each with its unit where the feed names one, how far along its line it is in kilometres, which way it is running, `>` in the file's point order and `<` back, and its speed, and a camera icon on every row that puts a chase camera behind that train, 60 m back and 25 m up, looking a little ahead of it. While it rides, the mouse moves the camera round the train rather than the world.
 
 - `F7` - toggle the trains, and the table of them
+- `F8` - toggle the live feed: on, one carriage per train Auckland Transport reports, where it reports it; off, the stand-ins; nothing without `AT_API_KEY`
 - Camera icon in the trains table - follow that train with a chase camera; click it again, press `Escape`, `T`, `R` or a fly key, or hide the trains to let go
 - Drag with the left or middle button while following - orbit the camera round the train, right to go round its right and up to look down on it
 - Mouse wheel, or drag with the right button, while following - zoom in and out, between 20 m and 3 km

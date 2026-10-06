@@ -108,6 +108,9 @@ impl TrackFrame {
 pub struct TrackSpline {
     spline: CatmullRom,
     lengths: ArcLength,
+    /// The position at every subdivision the length was measured over, with its distance
+    /// along, see nearest_between.
+    samples: Vec<(DVec3, f64)>,
 }
 
 impl TrackSpline {
@@ -124,13 +127,79 @@ impl TrackSpline {
         }
         let spline = CatmullRom::through(&line.positions)?;
         let lengths = spline.measure(SUBDIVISIONS);
+        let samples = lengths.samples(&spline);
 
-        Some(Self { spline, lengths })
+        Some(Self {
+            spline,
+            lengths,
+            samples,
+        })
     }
 
     /// The length of the line along the spline, in metres: the distance of the last point.
     pub fn length(&self) -> f64 {
         self.lengths.total()
+    }
+
+    /// The distance along the line of the point on it nearest a position, and how far the
+    /// position stands from the line there: nearest_between over the whole line.
+    pub fn nearest(&self, position: DVec3) -> (f64, f64) {
+        self.nearest_between(position, 0.0, self.length())
+            .unwrap_or((0.0, f64::INFINITY))
+    }
+
+    /// The distance along the line of the point on it nearest a position, looked for over
+    /// the stretch between two distances along the line, and how far the position stands
+    /// from the line there, level: the offset with its part along the ground's up taken
+    /// out, so a position on the ellipsoid under a track 40 m up the hill is on the line
+    /// and not 40 m off it. A train's reported position asks, with the metres of error a
+    /// GPS fix carries, and a line that passes a place twice, as the S-C does at Newmarket,
+    /// has two answers there, which is what the stretch is for: the caller knows where the
+    /// train was.
+    ///
+    /// The line is walked as the chords between the subdivisions its length was measured
+    /// over, a few metres each, widened by one subdivision either side of the stretch so
+    /// its ends are covered, and the position is dropped onto each; the distance is the
+    /// two subdivisions' interpolated by where it lands, which is the distance the table
+    /// would give that point. None for a stretch with no two subdivisions in it, which is
+    /// one wholly off either end of the line.
+    pub fn nearest_between(&self, position: DVec3, from: f64, to: f64) -> Option<(f64, f64)> {
+        let last = self.samples.len().checked_sub(1)?;
+        let first = self
+            .samples
+            .partition_point(|&(_, distance)| distance < from)
+            .saturating_sub(1);
+        let after = self
+            .samples
+            .partition_point(|&(_, distance)| distance <= to)
+            .min(last);
+        if after <= first {
+            return None;
+        }
+
+        let mut best: Option<(f64, f64)> = None;
+        for pair in self.samples[first..=after].windows(2) {
+            let ((start, from_distance), (end, to_distance)) = (pair[0], pair[1]);
+            let chord = end - start;
+            let length_squared = chord.length_squared();
+            let fraction = if length_squared > 0.0 {
+                ((position - start).dot(chord) / length_squared).clamp(0.0, 1.0)
+            } else {
+                0.0
+            };
+            let foot = start + chord * fraction;
+            let up = Frame::at_unit(unit_under(foot)).up;
+            let off = (position - foot).reject_from(up).length();
+
+            if best.is_none_or(|(_, nearest)| off < nearest) {
+                best = Some((
+                    from_distance + (to_distance - from_distance) * fraction,
+                    off,
+                ));
+            }
+        }
+
+        best
     }
 
     /// The frame at a distance along the line from its first point, the distance clamped to
