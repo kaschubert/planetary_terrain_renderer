@@ -56,6 +56,7 @@ impl Plugin for SheetGridPlugin {
                     toggle_sheet_grid,
                     collect_sheets,
                     wheel_adjusts_height,
+                    yield_wheel,
                     (style_height_slider, sync_checkboxes, show_height),
                 ),
             )
@@ -827,6 +828,19 @@ fn show_height(grid: Res<SheetGrid>, mut readout: Single<&mut Text, With<HeightR
 
 /// Moves the slider rather than the height directly, so the two can never disagree: the
 /// slider's own observer above is the one place the height is set.
+/// Hands the wheel to the grid's height while the box is ticked and back to the camera's
+/// zoom when it is not, since the orbital camera zooms on the wheel otherwise and the two
+/// acting at once would be a surprise. The grid resource changes rarely, so the camera is
+/// written only then.
+fn yield_wheel(grid: Res<SheetGrid>, mut cameras: Query<&mut OrbitalCameraController>) {
+    if !grid.is_changed() {
+        return;
+    }
+    for mut camera in &mut cameras {
+        camera.wheel_zooms = !grid.wheel_adjusts_height;
+    }
+}
+
 fn wheel_adjusts_height(
     mut wheel: MessageReader<MouseWheel>,
     grid: Res<SheetGrid>,

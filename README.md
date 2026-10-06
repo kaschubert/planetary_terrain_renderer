@@ -75,15 +75,15 @@ using only the mouse.
 
 - `R` - toggle orbital camera movement
 - Hold the left mouse button to pan the camera
-- Hold the middle mouse button to rotate the camera
-- Hold the right mouse button to zoom the camera
+- Hold the middle mouse button to rotate the camera: it goes the way you drag, right round to the right of the point under the cursor and up to look down on it
+- Hold the right mouse button and drag down to zoom out or up to zoom in, or turn the mouse wheel; both zoom towards the point under the cursor
 
 ### Visualization Toggles
 
 - `F1` - toggle this list of controls inside the app
 - `F2` - toggle the table of where each terrain's data came from
 - `F3` - toggle the Topo50 sheet grid over the terrain, coloured by the finest imagery downloaded, as does `show grid` in the F2 panel
-- Mouse wheel - raise or lower the sheet grid, once `wheel sets height` is ticked in the F2 panel
+- Mouse wheel - raise or lower the sheet grid, once `wheel sets height` is ticked in the F2 panel, which takes the wheel from the camera's zoom while ticked
 - `F4` - toggle Auckland's rail lines over the city, one colour per line
 - `W` - toggle wireframe view
 - `L` - toggle terrain data LOD view
