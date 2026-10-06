@@ -4,9 +4,13 @@
 #
 #   ./download_auckland_rail.sh
 #
-# Writes examples/spherical/auckland_rail.csv: one row per point, grouped by line and in
+# Writes examples/spherical/plugins/auckland_rail/auckland_rail.csv: one row per point, grouped by line and in
 # order along it. Unlike the terrain data this is small enough to commit, so the example
 # needs no download of its own and this only has to be rerun when the network changes.
+#
+# The example edits that file in place and marks it with an "Edited by hand" comment when it
+# does. Once the file carries that mark this writes auckland_rail.gtfs.csv beside it instead,
+# so a fresh feed can be diffed against the edits rather than destroying them.
 #
 # The feed (https://gtfs.at.govt.nz/gtfs.zip, about 30 MB, no key) carries every bus,
 # train and ferry service. The trains are the routes with route_type 2 run by agency AM,
@@ -22,8 +26,16 @@
 set -euo pipefail
 
 DIR="$(cd "$(dirname "$0")" && pwd)"
-OUT="$DIR/../examples/spherical/auckland_rail.csv"
+OUT="$DIR/../examples/spherical/plugins/auckland_rail/auckland_rail.csv"
 FEED="https://gtfs.at.govt.nz/gtfs.zip"
+
+# The edits are the valuable part; the feed can always be fetched again.
+if [ -f "$OUT" ] && grep -q '^# Edited by hand' "$OUT"; then
+    GTFS_OUT="${OUT%.csv}.gtfs.csv"
+    echo "== $OUT has been edited by hand in the spherical example"
+    echo "== writing $GTFS_OUT beside it instead, to diff against the edits"
+    OUT="$GTFS_OUT"
+fi
 
 WORK="$(mktemp -d)"
 trap 'rm -rf "$WORK"' EXIT
@@ -128,10 +140,12 @@ with open(out, "w", encoding="utf-8", newline="\n") as file:
             f"#   {route['route_short_name']}  colour {route['route_color']}  "
             f"shape {shape}  {count} points to {len(kept)}  \"{sign}\"\n"
         )
-    file.write("line,latitude,longitude\n")
+    # Every point starts on the ground with no offset, and nothing is known about the terrain
+    # under it until the example has sampled and saved it. Blank means not known, not zero.
+    file.write("line,latitude,longitude,mode,height,terrain\n")
     for route, _, _, _, kept in lines:
         for lat, lon in kept:
-            file.write(f"{route['route_short_name']},{lat:.5f},{lon:.5f}\n")
+            file.write(f"{route['route_short_name']},{lat:.5f},{lon:.5f},ground,0.0,\n")
 
 for route, shape, sign, count, kept in lines:
     print(f"{route['route_short_name']}: {count} points to {len(kept)}, {sign}")
