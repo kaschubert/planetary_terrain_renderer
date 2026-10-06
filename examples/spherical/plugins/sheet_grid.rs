@@ -241,10 +241,9 @@ const HEIGHT_RANGE: (f32, f32) = (0.0, 3000.0);
 /// Metres per notch of the wheel.
 const WHEEL_STEP: f32 = 25.0;
 
-/// The lines are drawn in front of the terrain, the way the labels already are. They float
-/// at one height, and terrain higher than that would otherwise hide them: a ridge between
-/// the camera and a cell took its outline while its label, being screen space, stayed.
-/// Cells on the far side of the planet are still dropped by the horizon test.
+/// The depth bias that draws a gizmo group in front of the terrain: the sheet grid here, and
+/// the rail lines, the editor's discs and the track frames, which take it from here so that a
+/// retune reaches them all.
 ///
 /// Not the full -1, though. The gizmo shader maps a line's depth to (z/w)^(1 + bias), and
 /// at -1 that is the near plane for every vertex: the whole grid on one depth, with depth
@@ -252,8 +251,14 @@ const WHEEL_STEP: f32 = 25.0;
 /// other, and at long range the rounding put vertices a hair past the plane and clipped
 /// them. At -0.9 the map is (z/w)^0.1, still ordered and still distinct across the grid,
 /// while anything short of geometry touching the lens is beaten.
+pub const IN_FRONT_OF_TERRAIN: f32 = -0.9;
+
+/// The lines are drawn in front of the terrain, the way the labels already are. They float
+/// at one height, and terrain higher than that would otherwise hide them: a ridge between
+/// the camera and a cell took its outline while its label, being screen space, stayed.
+/// Cells on the far side of the planet are still dropped by the horizon test.
 fn draw_grid_over_terrain(mut store: ResMut<GizmoConfigStore>) {
-    store.config_mut::<SheetGizmos>().0.depth_bias = -0.9;
+    store.config_mut::<SheetGizmos>().0.depth_bias = IN_FRONT_OF_TERRAIN;
 }
 
 fn toggle_sheet_grid(input: Res<ButtonInput<KeyCode>>, mut grid: ResMut<SheetGrid>) {
