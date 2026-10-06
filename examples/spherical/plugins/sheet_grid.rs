@@ -400,6 +400,14 @@ const LABEL_CHAR_WIDTH: f32 = 7.8;
 const LABEL_HEIGHT: f32 = 20.0;
 const LABEL_GAP: f32 = 6.0;
 
+/// The footprint of a label with this caption, in pixels: the characters at their width,
+/// the 4 px of padding either side, and the line's height. The trains' labels are set in
+/// the same font with the same padding and take their footprint from here, so a change of
+/// either reaches them too.
+pub fn label_size(caption: &str) -> Vec2 {
+    Vec2::new(LABEL_CHAR_WIDTH * caption.len() as f32 + 8.0, LABEL_HEIGHT)
+}
+
 #[derive(Component)]
 struct SheetLabel;
 
@@ -531,7 +539,7 @@ fn draw_sheet_grid(
             Some(metres) => format!("{} {metres}m", sheet.name),
             None => sheet.name.clone(),
         };
-        let size = Vec2::new(LABEL_CHAR_WIDTH * caption.len() as f32 + 8.0, LABEL_HEIGHT);
+        let size = label_size(&caption);
 
         if cell.cmplt(size + 2.0 * LABEL_GAP).any() {
             continue;

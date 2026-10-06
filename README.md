@@ -123,6 +123,15 @@ While editing, every point draws as a disc on its line: the line's colour for a 
 - `Ctrl+Z` / `Ctrl+Y` - undo and redo, up to 200 edits back
 - `Ctrl+S` - save the rail lines, edits and all, back to examples/spherical/plugins/auckland_rail/auckland_rail.csv, editor on or off, as the panel's `save` button does; a toast beside the panel says how many points were saved, or why not
 
+### Trains
+
+One carriage per line drives itself along the drawn track, end to end and back at 72 km/h on the left-hand running line, with the line's name above it, as a stand-in until the live positions arrive. A table in the bottom left corner lists the trains, each with how far along its line it is in kilometres, which way it is running, `>` in the file's point order and `<` back, and its speed, and a camera icon on every row that puts a chase camera behind that train, 60 m back and 25 m up, looking a little ahead of it. While it rides, the mouse moves the camera round the train rather than the world.
+
+- `F7` - toggle the trains, and the table of them
+- Camera icon in the trains table - follow that train with a chase camera; click it again, press `Escape`, `T`, `R` or a fly key, or hide the trains to let go
+- Drag with the left or middle button while following - orbit the camera round the train, right to go round its right and up to look down on it
+- Mouse wheel, or drag with the right button, while following - zoom in and out, between 20 m and 3 km
+
 ### Quality Adjustments
 
 - `N` - decrease blend distance
