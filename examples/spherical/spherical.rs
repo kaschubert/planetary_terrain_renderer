@@ -344,15 +344,14 @@ fn spawn_vram_text(mut commands: Commands) {
 /// Puts the overlay text on the clipboard, so the numbers can be pasted somewhere.
 ///
 /// On X11 whoever sets the clipboard has to keep serving it until another application
-/// claims it, which is what wait() does - hence the thread, since it blocks.
+/// claims it, which is what set_clipboard_text waits for - hence the thread, since it
+/// blocks.
 fn copy_stats_to_clipboard(
     mut commands: Commands,
     button: Query<&Interaction, (Changed<Interaction>, With<CopyButton>)>,
     text: Single<&Text, With<VramText>>,
     mut toast: Query<&mut CopiedToast>,
 ) {
-    use arboard::SetExtLinux;
-
     for interaction in &button {
         if *interaction != Interaction::Pressed {
             continue;
@@ -384,12 +383,41 @@ fn copy_stats_to_clipboard(
         std::thread::spawn(move || {
             match arboard::Clipboard::new() {
                 Ok(mut clipboard) => {
-                    let _ = clipboard.set().wait().text(stats);
+                    if let Err(error) = set_clipboard_text(&mut clipboard, stats) {
+                        error!("could not set the clipboard: {error}");
+                    }
                 }
                 Err(error) => error!("could not reach the clipboard: {error}"),
             };
         });
     }
+}
+
+/// Linux only, as arboard has it: block until another application has taken the
+/// clipboard over, since on X11 the setter serves the contents until then. The platforms
+/// below have a clipboard that keeps the text itself, and no wait() to call.
+#[cfg(all(
+    unix,
+    not(any(target_os = "macos", target_os = "android", target_os = "emscripten"))
+))]
+fn set_clipboard_text(
+    clipboard: &mut arboard::Clipboard,
+    text: String,
+) -> Result<(), arboard::Error> {
+    use arboard::SetExtLinux;
+
+    clipboard.set().wait().text(text)
+}
+
+#[cfg(not(all(
+    unix,
+    not(any(target_os = "macos", target_os = "android", target_os = "emscripten"))
+)))]
+fn set_clipboard_text(
+    clipboard: &mut arboard::Clipboard,
+    text: String,
+) -> Result<(), arboard::Error> {
+    clipboard.set_text(text)
 }
 
 fn expire_copied_toast(
