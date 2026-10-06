@@ -10,7 +10,6 @@
 //! against the georeferencing of every whole sheet file on disk, 964 of them, and against
 //! PROJ at the corners.
 
-use super::unit_position;
 use bevy::ecs::relationship::RelatedSpawnerCommands;
 use bevy::{
     color::palettes::{basic, css},
@@ -24,7 +23,10 @@ use bevy::{
         TrackClick, ValueChange, observe,
     },
 };
-use bevy_terrain::{math::Coordinate, prelude::*};
+use bevy_terrain::{
+    math::{Coordinate, unit_position},
+    prelude::*,
+};
 use big_space::prelude::{CellCoord, Grids};
 use std::f64::consts::PI;
 

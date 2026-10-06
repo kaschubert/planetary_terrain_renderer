@@ -10,7 +10,7 @@
 //! is. The terrain's heights live on the gpu, so there is no putting a point on the
 //! ground, and the City Rail Link is a tunnel anyway.
 
-use super::unit_position;
+use bevy_terrain::math::unit_position;
 use bevy::{math::DVec3, prelude::*};
 use bevy_terrain::prelude::*;
 use big_space::prelude::{CellCoord, Grids};

@@ -3,7 +3,7 @@ use bevy::math::DVec3;
 use bevy::text::FontSize;
 use bevy::window::WindowResolution;
 use bevy::{prelude::*, reflect::TypePath, render::render_resource::*, shader::ShaderRef};
-use bevy_terrain::math::Coordinate;
+use bevy_terrain::math::{Coordinate, unit_position};
 use bevy_terrain::prelude::*;
 use big_space::prelude::{CellCoord, Grids};
 
@@ -116,18 +116,6 @@ struct TerrainStreaming {
     gradient: Handle<Image>,
     /// The spawned entity per entry of STREAMED_TERRAINS.
     active: Vec<Option<Entity>>,
-}
-
-/// Converts longitude and latitude to a position on the spheroid. Matches the unit sphere
-/// convention the preprocessor warps with, see CubeTransformer in transformers.rs.
-fn unit_position(longitude: f64, latitude: f64) -> DVec3 {
-    let (longitude, latitude) = (longitude.to_radians(), latitude.to_radians());
-
-    DVec3::new(
-        -latitude.cos() * longitude.cos(),
-        latitude.sin(),
-        latitude.cos() * longitude.sin(),
-    )
 }
 
 fn main() {
@@ -262,19 +250,10 @@ fn initialize(
 
     let mut view = Entity::PLACEHOLDER;
 
-    // Longitude and latitude to a position on the spheroid. The unit sphere convention
-    // matches the one the preprocessor warps with, see CubeTransformer in transformers.rs.
-    let (longitude, latitude) = (CAMERA_LONGITUDE.to_radians(), CAMERA_LATITUDE.to_radians());
-    let up = DVec3::new(
-        -latitude.cos() * longitude.cos(),
-        latitude.sin(),
-        latitude.cos() * longitude.sin(),
-    );
-    let north = DVec3::new(
-        latitude.sin() * longitude.cos(),
-        latitude.cos(),
-        -latitude.sin() * longitude.sin(),
-    );
+    // Up is the camera's direction on the unit sphere and north the meridian's direction
+    // there, the part of the planet's axis that is level at up.
+    let up = unit_position(CAMERA_LONGITUDE, CAMERA_LATITUDE);
+    let north = (DVec3::Y - up * up.y).normalize();
 
     let camera_position = Coordinate::from_unit_position(up, true)
         .local_position(TerrainShape::WGS84, CAMERA_ALTITUDE);
