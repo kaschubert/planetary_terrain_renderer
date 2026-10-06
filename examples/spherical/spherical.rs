@@ -385,3 +385,6 @@ fn stream_terrains(
     //     view,
     // );
 }
+
+#[cfg(test)]
+mod tests;
