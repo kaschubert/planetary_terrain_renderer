@@ -15,10 +15,10 @@
 //! The carriage is a glTF model of one car, spawned once per train as a spatial entity under
 //! the big_space root, so that it is placed as the lines are, by a cell and a transform
 //! within it, with the model as a child carrying the fixed transform that turns it to face
-//! along the frame, scales it to a car's length and lifts it onto the rail. A label with
-//! the line's name stands above each carriage on screen, placed as the sheet grid's labels
-//! are. F7 hides the lot; the trains drive on hidden, so they come back where they would
-//! have been.
+//! along the frame, scales it to a car's length and lifts it onto the rail. A label of three
+//! lines stands above each carriage on screen, its line, its unit and its speed, see
+//! label_spans, placed and sized as the sheet grid's labels are. F7 hides the lot; the
+//! trains drive on hidden, so they come back where they would have been.
 //!
 //! A table in the bottom left corner lists the trains, where each is along its line, which
 //! way it is running and how fast, and which unit it is when a feed has said, with a camera
@@ -28,16 +28,18 @@
 //! caption the driver has set, which is where the live feed says how it is doing.
 
 use super::auckland_rail::{AucklandRail, line_colour};
+use super::provenance::ascii;
 use super::shared::rail_network::RailLine;
-use super::sheet_grid::label_size;
+use super::sheet_grid::label_size_lines;
 use super::track_frames::{
     TRACK_CENTRES, TrackFrame, TrackSpline, TrackSplines, in_grid, offset, refresh_track_splines,
     reversed,
 };
-use bevy::{prelude::*, text::FontSize, ui::UiSystems};
+use bevy::{prelude::*, text::FontSize, ui::UiSystems, ui::widget::TextUiWriter};
 use bevy_terrain::prelude::*;
 use big_space::prelude::{CellCoord, Grids};
 use std::f32::consts::FRAC_PI_2;
+use table::speed_text;
 
 mod chase;
 mod table;
@@ -304,6 +306,45 @@ pub fn advance(distance: f64, direction: f64, speed: f64, dt: f64, length: f64) 
     }
 }
 
+/// The label's font: the sheet grid's labels' size, which label_size_lines measures by.
+fn label_font() -> TextFont {
+    TextFont {
+        font_size: FontSize::Px(13.0),
+        ..default()
+    }
+}
+
+/// The label over a carriage as the three pieces of its text: the line's name, which the
+/// root of the label holds in the line's colour; the unit on a line of its own where a feed
+/// has named one, and nothing for a stand-in, so its label is two lines rather than one of
+/// them blank; and the speed in km/h on a line of its own, as the table has it. Each piece
+/// after the first carries its own line break, so the pieces concatenate into the label.
+/// Folded to the font as the table's cells are, since the names come from the file and the
+/// feed.
+pub fn label_spans(name: &str, train: &Train) -> [String; 3] {
+    let unit = if train.id.is_empty() {
+        String::new()
+    } else {
+        format!("\n{}", ascii(&train.id))
+    };
+
+    [
+        ascii(name),
+        unit,
+        format!("\n{} km/h", speed_text(train.speed)),
+    ]
+}
+
+/// The label's lines as the footprint wants them: the pieces without their breaks, and the
+/// empty one left out.
+fn label_lines(spans: &[String; 3]) -> Vec<&str> {
+    spans
+        .iter()
+        .map(|span| span.trim_start_matches('\n'))
+        .filter(|line| !line.is_empty())
+        .collect()
+}
+
 /// The frame the carriage stands in: the line's frame at the train's distance, turned round
 /// when the train is running back so that forward is the way it is going, and moved half
 /// the track centres to the left of that, onto the left-hand running line. Turned round,
@@ -378,15 +419,16 @@ fn spawn_carriages(
             ))
             .with_child((WorldAssetRoot(scene.clone()), model_transform()))
             .id();
+        // The line's name in the line's colour at the root, and the unit and the speed as
+        // spans under it in white, see label_spans; label_trains rewrites the spans.
+        let spans = label_spans(&line.name, train);
         let label = commands
             .spawn((
                 TrainLabel,
-                Text::new(line.name.clone()),
+                Text::new(spans[0].clone()),
                 TextColor(line_colour(&line.name)),
-                TextFont {
-                    font_size: FontSize::Px(13.0),
-                    ..default()
-                },
+                label_font(),
+                TextLayout::new(Justify::Center, LineBreak::NoWrap),
                 Node {
                     position_type: PositionType::Absolute,
                     padding: UiRect::axes(Val::Px(4.0), Val::Px(1.0)),
@@ -394,6 +436,18 @@ fn spawn_carriages(
                 },
                 BackgroundColor(Color::srgba(0.0, 0.0, 0.0, 0.55)),
                 Visibility::Hidden,
+                children![
+                    (
+                        TextSpan::new(spans[1].clone()),
+                        label_font(),
+                        TextColor::WHITE
+                    ),
+                    (
+                        TextSpan::new(spans[2].clone()),
+                        label_font(),
+                        TextColor::WHITE
+                    ),
+                ],
             ))
             .id();
 
@@ -464,9 +518,10 @@ fn place_trains(
 
 /// Puts each train's label above its carriage on screen, as the sheet grid's labels are
 /// placed: the middle of the roof projected through the camera, and the node's bottom edge
-/// at it. Hidden when the carriage is, when the roof is off the screen or behind the camera,
-/// and when it is over the horizon, where the planet hides the carriage but a node would
-/// show regardless.
+/// at it, and writes the unit and the speed into it, see label_spans, each span only when
+/// its text has changed. Hidden when the carriage is, when the roof is off the screen or
+/// behind the camera, and when it is over the horizon, where the planet hides the carriage
+/// but a node would show regardless.
 fn label_trains(
     trains: Res<Trains>,
     rail: Res<AucklandRail>,
@@ -477,6 +532,7 @@ fn label_trains(
         With<OrbitalCameraController>,
     >,
     mut labels: Query<(&mut Node, &mut Visibility), With<TrainLabel>>,
+    mut writer: TextUiWriter,
 ) {
     let shown = trains.drawn(&rail);
 
@@ -522,7 +578,15 @@ fn label_trains(
 
         match on_screen.filter(|_| !over_horizon) {
             Some(at) => {
-                let size = label_size(train.line_name(&rail));
+                let spans = label_spans(train.line_name(&rail), train);
+                for (index, wanted) in spans.iter().enumerate().skip(1) {
+                    if let Some(mut text) = writer.get_text(label, index)
+                        && *text != *wanted
+                    {
+                        *text = wanted.clone();
+                    }
+                }
+                let size = label_size_lines(&label_lines(&spans));
                 node.left = Val::Px(at.x - size.x / 2.0);
                 node.top = Val::Px(at.y - size.y);
                 visibility.set_if_neq(Visibility::Visible);

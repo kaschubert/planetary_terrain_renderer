@@ -4,6 +4,7 @@
 //! on.
 
 use super::*;
+use crate::plugins::sheet_grid::label_size;
 use crate::plugins::track_frames::tests::{eastward, quarter_circle};
 
 /// A train on the first line at a distance, heading as given.
@@ -176,4 +177,47 @@ fn the_carriage_heading_back_descends_what_the_line_climbs() {
     let back = carriage_frame(&spline, &train(500.0, -1.0));
     assert!((out.grade - 0.02).abs() < 1e-3, "{}", out.grade);
     assert!((back.grade + 0.02).abs() < 1e-3, "{}", back.grade);
+}
+
+/// A stand-in's label is its line and its speed; a live train's has its unit between them.
+/// Each piece after the first carries its own break, so the pieces concatenate into the
+/// label, and the names from the file and the feed are folded to the font.
+#[test]
+fn the_label_is_the_line_the_unit_where_there_is_one_and_the_speed() {
+    let stand_in = Train::stand_in(0);
+    assert_eq!(label_spans("E-W", &stand_in), ["E-W", "", "\n72 km/h"]);
+    assert_eq!(
+        label_lines(&label_spans("E-W", &stand_in)),
+        ["E-W", "72 km/h"]
+    );
+
+    let live = Train {
+        id: "AMP\u{00a0}1142".to_string(),
+        speed: 12.5,
+        ..Train::stand_in(0)
+    };
+    assert_eq!(
+        label_spans("Onehunga\u{2013}West", &live),
+        ["Onehunga-West", "\nAMP 1142", "\n45 km/h"]
+    );
+    assert_eq!(
+        label_lines(&label_spans("S-C", &live)),
+        ["S-C", "AMP 1142", "45 km/h"]
+    );
+}
+
+/// The footprint of a label of several lines is its widest line's width and a line taller
+/// for each line after the first, and of one line it is the sheet grid's footprint.
+#[test]
+fn a_label_of_more_lines_is_as_wide_as_its_widest_and_a_line_taller_for_each() {
+    let one = label_size_lines(&["AMP 1142"]);
+    assert_eq!(one, label_size("AMP 1142"));
+
+    let three = label_size_lines(&["S-C", "AMP 1142", "45 km/h"]);
+    assert_eq!(three.x, label_size("AMP 1142").x);
+    let two = label_size_lines(&["S-C", "45 km/h"]);
+    assert!(two.y > one.y && three.y > two.y, "{one} {two} {three}");
+    assert!((three.y - two.y - (two.y - one.y)).abs() < 1e-5);
+
+    assert_eq!(label_size_lines(&[]), label_size(""));
 }

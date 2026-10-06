@@ -408,6 +408,23 @@ pub fn label_size(caption: &str) -> Vec2 {
     Vec2::new(LABEL_CHAR_WIDTH * caption.len() as f32 + 8.0, LABEL_HEIGHT)
 }
 
+/// What each line after the first adds to a label's height, in pixels: the font's default
+/// line height, 1.2 em of 13 px.
+const LABEL_LINE_HEIGHT: f32 = 15.6;
+
+/// The footprint of a label of several lines, in pixels: as wide as its widest line's, see
+/// label_size, and a line's height taller for each line after the first. The trains' labels
+/// are three lines.
+pub fn label_size_lines(lines: &[&str]) -> Vec2 {
+    let widest = lines
+        .iter()
+        .map(|line| label_size(line).x)
+        .fold(label_size("").x, f32::max);
+    let extra = lines.len().saturating_sub(1) as f32;
+
+    Vec2::new(widest, LABEL_HEIGHT + LABEL_LINE_HEIGHT * extra)
+}
+
 #[derive(Component)]
 struct SheetLabel;
 
