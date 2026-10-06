@@ -7,14 +7,11 @@ use bevy_terrain::math::{Coordinate, unit_position};
 use bevy_terrain::prelude::*;
 use big_space::prelude::{CellCoord, Grids};
 
-mod auckland_rail;
-mod provenance;
-mod sheet_grid;
-mod vram_usage;
-use auckland_rail::AucklandRailPlugin;
-use provenance::ProvenancePlugin;
-use sheet_grid::SheetGridPlugin;
-use vram_usage::VramUsagePlugin;
+mod plugins;
+use plugins::auckland_rail::AucklandRailPlugin;
+use plugins::provenance::ProvenancePlugin;
+use plugins::sheet_grid::SheetGridPlugin;
+use plugins::vram_usage::VramUsagePlugin;
 
 const RADIUS: f64 = 6371000.0;
 

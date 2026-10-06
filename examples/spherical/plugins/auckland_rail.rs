@@ -39,7 +39,7 @@ impl Plugin for AucklandRailPlugin {
 
 /// Comment lines, a header, then line,latitude,longitude rows grouped by line and in order
 /// along it. The comments name the feed version and the shape each line came from.
-const RAIL_CSV: &str = include_str!("auckland_rail.csv");
+const RAIL_CSV: &str = include_str!("auckland_rail/auckland_rail.csv");
 
 /// How far above the ellipsoid the lines are drawn, in metres. The network runs from sea
 /// level at Waitematā to about 70 m at Pukekohe. The lines are drawn in front of the terrain

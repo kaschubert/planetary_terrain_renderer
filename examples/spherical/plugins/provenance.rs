@@ -6,8 +6,8 @@
 //! copied out of it. A provenance file is a few kilobytes, so this holds all of them for
 //! the life of the process and the table is complete from the first frame.
 
-use super::STREAMED_TERRAINS;
 use super::sheet_grid::SheetGridControls;
+use crate::STREAMED_TERRAINS;
 use bevy::asset::LoadState;
 use bevy::ecs::relationship::RelatedSpawnerCommands;
 use bevy::prelude::*;
