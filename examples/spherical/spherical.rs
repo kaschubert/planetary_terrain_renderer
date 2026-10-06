@@ -6,10 +6,12 @@ use bevy::{prelude::*, reflect::TypePath, render::render_resource::*, shader::Sh
 use bevy_terrain::math::{Coordinate, unit_position};
 use bevy_terrain::prelude::*;
 use big_space::prelude::{CellCoord, Grids};
+use transform_gizmo_bevy::{GizmoCamera, TransformGizmoPlugin};
 
 mod plugins;
 use plugins::auckland_rail::AucklandRailPlugin;
 use plugins::provenance::ProvenancePlugin;
+use plugins::rail_editor::RailEditorPlugin;
 use plugins::sheet_grid::SheetGridPlugin;
 use plugins::vram_usage::VramUsagePlugin;
 
@@ -136,7 +138,12 @@ fn main() {
             ProvenancePlugin,            // where each terrain's pixels came from, top right
             SheetGridPlugin,             // the Topo50 sheets over the terrain, coloured by coverage
             AucklandRailPlugin,          // the rail lines over Auckland, in AT's colours
+            RailEditorPlugin,            // selecting, adding and removing the lines' points, on F5
             TerrainPickingPlugin,
+            // The move gizmo's arrows, see rail_editor/move_gizmo.rs. Added here and not by
+            // RailEditorPlugin so that tests.rs can run the editor without a renderer, which
+            // the gizmo crate's plugin wants.
+            TransformGizmoPlugin,
         ))
         // A terrain costs roughly 2.6 MiB per atlas slot, for height and albedo together,
         // and the atlas is allocated whole however few slots are in use. With loading
@@ -264,6 +271,10 @@ fn initialize(
                     .looking_to(camera_direction.as_vec3(), up.as_vec3()),
                 DebugCameraController::new(RADIUS),
                 OrbitalCameraController::default(),
+                // The move gizmo draws through this camera and casts its pointer rays
+                // from it. It reads the camera's GlobalTransform, which big_space keeps
+                // in render space, so the handle it targets is placed in render space too.
+                GizmoCamera,
             ))
             .id();
     });

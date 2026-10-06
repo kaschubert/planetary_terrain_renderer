@@ -52,6 +52,9 @@ wgpu-core = { version = "29", optional = true } # keep in sync with bevy's wgpu
 bevy = { version = "0.19.1", features = ["bevy_dev_tools"] }
 # For the overlay's copy button.
 arboard = "3.6"
+# The rail editor's move gizmo, examples/spherical/rail_editor/move_gizmo.rs. 0.11 is the
+# release built against Bevy 0.19.
+transform-gizmo-bevy = "0.11"
 
 [[example]]
 name = "spherical"

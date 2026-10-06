@@ -102,6 +102,27 @@ using only the mouse.
 - Hold `Ctrl` - detach the culling camera: the terrain keeps loading and culling for the pose you had, while you fly off to look at it from outside; the letter toggles stand aside while it is held, so Ctrl+S, Ctrl+Z and Ctrl+Y reach the rail editor, at the cost of two lines on the console per chord
 - `D` - toggle surface approximation debug
 
+### Rail Editor
+
+While editing, every point draws as a disc on its line: the line's colour for a ground point, amber for a fixed point and grey for a between point, and white when selected. A stretch between two anchors, a tunnel or a bridge, draws dashed whether editing or not, and while editing a stretch of ground steeper than 3.5 per cent, which rail does not climb, draws red to say a tunnel or a bridge is wanted there. The panel in the bottom right corner reads out the point last clicked: its line and index, latitude and longitude, the terrain under it, its height and what that means for its mode, and the grade of the two segments it joins, marked where steeper than rail climbs. Under the readout are the panel's buttons; one that cannot apply is dimmed, and while F4 hides the lines every button but `save` is, as the mouse and the keys are inert then. The gizmo stands on the point last clicked: a drag along the ground resamples the terrain under a ground point as it goes, and a lift changes a ground point's offset or a fixed point's height. The frames F6 shows are what the track models will be placed on: a transform every 25 m along a spline through the points, facing along the line and standing up from the ground, so a kink or a lean in them is a point to move.
+
+- `F5` - toggle the rail editor panel and editing: the discs draw, the mouse works on them, and the panel shows
+- `F6` - toggle the track frames: an arrow every 25 m along the line, a white tick up, a grey sleeper across, and the two running lines either side
+- `ground` / `fixed` / `between` - give the selection that mode: ground and fixed keep the point where it is, as an offset from the terrain under it or as a height of its own; between drops it onto the chord between its anchors
+- `drop to ground` - put the selection back on the terrain with no offset
+- `span selection` - make a tunnel or a bridge of three or more selected points on a line, its ends fixed where they are and the inside between
+- `select steep run` - grow the selection over the ground steeper than rail climbs either side of it, stopping at a stretch already spanned
+- `undo` / `redo` / `save` - what the keys below do
+- `prev` / `next` - step through the points the startup sampling found the ground moved under by more than a metre since the file was saved, selecting each and flying the camera to it
+- `Click` a disc - select that point; a click on the terrain leaves the selection as it is
+- `Shift`+click a disc on the same line - select the run of points from the last one clicked to it, which is how a tunnel is selected: click one portal, `Shift`+click the other; on another line it adds the point
+- `Double-click` the terrain beside a line - add a point to it there, on the ground
+- `Drag` the gizmo - move the selection: red arrow east, green up, blue south; green square along the ground, red and blue squares in a vertical wall; any lift turns a between point fixed
+- `Delete` - remove the selected points, keeping at least two on a line
+- `Escape` - clear the selection
+- `Ctrl+Z` / `Ctrl+Y` - undo and redo, up to 200 edits back
+- `Ctrl+S` - save the rail lines, edits and all, back to examples/spherical/plugins/auckland_rail/auckland_rail.csv, editor on or off, as the panel's `save` button does; a toast beside the panel says how many points were saved, or why not
+
 ### Quality Adjustments
 
 - `N` - decrease blend distance

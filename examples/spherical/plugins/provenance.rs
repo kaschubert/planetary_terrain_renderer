@@ -285,8 +285,9 @@ fn provenance_cell(panel: &mut RelatedSpawnerCommands<ChildOf>, text: &str, colo
 
 /// The bundled font covers printable ASCII and nothing else, so anything outside it would
 /// render as a gap. These strings come from data files rather than from this source, so
-/// fold rather than trust.
-fn ascii(text: &str) -> String {
+/// fold rather than trust. The rail editor's panel shows line names from its file through
+/// this too.
+pub(super) fn ascii(text: &str) -> String {
     text.chars()
         .map(|character| match character {
             '\u{2013}' | '\u{2014}' | '\u{2022}' | '\u{00b7}' => '-',
