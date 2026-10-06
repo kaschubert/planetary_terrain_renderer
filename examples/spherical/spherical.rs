@@ -13,6 +13,7 @@ use plugins::auckland_rail::AucklandRailPlugin;
 use plugins::provenance::ProvenancePlugin;
 use plugins::rail_editor::RailEditorPlugin;
 use plugins::sheet_grid::SheetGridPlugin;
+use plugins::track_frames::TrackFramesPlugin;
 use plugins::vram_usage::VramUsagePlugin;
 
 const RADIUS: f64 = 6371000.0;
@@ -139,6 +140,7 @@ fn main() {
             SheetGridPlugin,             // the Topo50 sheets over the terrain, coloured by coverage
             AucklandRailPlugin,          // the rail lines over Auckland, in AT's colours
             RailEditorPlugin,            // selecting, adding and removing the lines' points, on F5
+            TrackFramesPlugin,           // the track frames the models stand on, every 25 m, on F6
             TerrainPickingPlugin,
             // The move gizmo's arrows, see rail_editor/move_gizmo.rs. Added here and not by
             // RailEditorPlugin so that tests.rs can run the editor without a renderer, which

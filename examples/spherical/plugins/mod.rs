@@ -7,4 +7,5 @@ pub mod provenance;
 pub mod rail_editor;
 pub mod shared;
 pub mod sheet_grid;
+pub mod track_frames;
 pub mod vram_usage;
