@@ -61,7 +61,7 @@ struct StreamedTerrain {
     /// Spawning is not instant - the terrain still has to stream its tiles in - so this
     /// wants to be comfortably further out than the distance at which the detail becomes
     /// visible, or it pops in. It also has to be small enough that two neighbours are
-    /// never resident at once: wellington and auckland are 493 km apart, so with the
+    /// never resident at once: wellington and auckland are 483 km apart, so with the
     /// margin below the pair can never both be live.
     radius: Option<f64>,
 }
@@ -155,7 +155,7 @@ fn main() {
         // and the atlas is allocated whole however few slots are in use. With loading
         // culled to the view frustum the resident terrains hold about a hundred slots
         // each, against 1028 at the default size, so 256 leaves better than twice that in
-        // hand for the burst a fast turn requests before released slots cycle back. Four
+        // hand for the burst a fast turn requests before released slots cycle back. Three
         // are resident at once at most - the globe, the country and a city - which is
         // about 2.0 GiB. Running out no longer panics either: the
         // finest tiles just go missing until the tree re-requests them, with a warning.

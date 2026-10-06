@@ -20,7 +20,7 @@
 # the 0.5 m mosaic does not already give, at more than twice the disk this machine has
 # free. The city centre sheet keeps its 0.075 m because it is one sheet, not three.
 #
-# The two albedo levels are complementary and preprocess_auckland_west_south feeds both to
+# The two albedo levels are complementary and preprocess_auckland feeds both to
 # one attachment, coarser first so the finer wins where they overlap. The 2010 mosaic
 # covers both sheets completely; the 2024 survey adds current colour over 639 km2 of
 # BA31's 864 but only 52 km2 of BB32, so most of South Auckland renders from the older

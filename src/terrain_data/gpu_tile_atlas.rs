@@ -107,7 +107,8 @@ impl GpuTileAtlas {
     ///
     /// These resources live in the render world and are only ever inserted, by
     /// `initialize`, so without this a despawned terrain keeps its atlas textures
-    /// allocated for the lifetime of the app - several hundred MiB each.
+    /// allocated for the lifetime of the app - about 2.6 MiB per slot for the height and
+    /// albedo pair the examples use, so some 2.6 GiB at the default atlas size.
     pub(crate) fn despawn(
         mut gpu_tile_atlases: ResMut<TerrainComponents<GpuTileAtlas>>,
         mut gpu_terrains: ResMut<TerrainComponents<GpuTerrain>>,
