@@ -3,7 +3,10 @@
 //! The camera controllers read the mouse directly, so without this a drag on a slider was
 //! also a pan, and a click on a checkbox also planted a pan anchor. Bevy's UI already
 //! knows what is under the pointer; this turns that into one question the controllers can
-//! ask before they start anything.
+//! ask before they start anything. The hover map comes from bevy_picking, which an app
+//! without the default plugins' picking may not have; then nothing is ever over the UI and
+//! the controllers run unhindered, rather than the app panicking on its first frame for want
+//! of a resource.
 
 use bevy::{
     picking::{hover::HoverMap, pointer::PointerId},
@@ -35,7 +38,7 @@ impl PointerCapture {
 }
 
 pub(crate) fn track_pointer_capture(
-    hover: Res<HoverMap>,
+    hover: Option<Res<HoverMap>>,
     nodes: Query<(), With<ComputedNode>>,
     buttons: Res<ButtonInput<MouseButton>>,
     mut capture: ResMut<PointerCapture>,
@@ -43,7 +46,8 @@ pub(crate) fn track_pointer_capture(
     // Every node is picked by default, whether or not it is interactive, and blocks what is
     // under it. The filter is only insurance against another backend feeding this map.
     capture.over_ui = hover
-        .get(&PointerId::Mouse)
+        .as_deref()
+        .and_then(|hover| hover.get(&PointerId::Mouse))
         .is_some_and(|hits| hits.keys().any(|entity| nodes.contains(*entity)));
 
     let over_ui = capture.over_ui;
