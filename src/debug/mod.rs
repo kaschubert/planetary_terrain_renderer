@@ -22,8 +22,9 @@ pub(crate) use self::{
     approximation_debug::*, camera::*, orbital_camera::*, pointer_capture::track_pointer_capture,
 };
 pub use self::{
-    camera::DebugCameraController, orbital_camera::OrbitalCameraController,
-    pointer_capture::PointerCapture,
+    camera::DebugCameraController,
+    orbital_camera::OrbitalCameraController,
+    pointer_capture::{ClaimsPointer, PointerCapture},
 };
 
 #[cfg(feature = "metal_capture")]
