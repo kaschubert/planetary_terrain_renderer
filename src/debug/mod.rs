@@ -126,6 +126,12 @@ pub fn extract_debug(mut debug: ResMut<DebugTerrain>, extracted_debug: Extract<R
 }
 
 pub fn toggle_debug(input: Res<ButtonInput<KeyCode>>, mut debug: ResMut<DebugTerrain>) {
+    // With Control held the letters are somebody else's chords, Ctrl+S being a save in the
+    // spherical example, and must not toggle anything here on the way through.
+    if input.pressed(KeyCode::ControlLeft) || input.pressed(KeyCode::ControlRight) {
+        return;
+    }
+
     if input.just_pressed(KeyCode::KeyW) {
         debug.wireframe = !debug.wireframe;
         println!(
