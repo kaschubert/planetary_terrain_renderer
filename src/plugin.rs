@@ -1,6 +1,7 @@
 use crate::{
     formats::TiffLoader,
     preprocess::{MipPipelines, initialize_mip_pipelines, mip_prepass},
+    provenance::TerrainProvenance,
     render::{
         GpuTerrain, GpuTerrainView, TerrainItem, TerrainTilingPrepassPipelines, TilingPrepassItem,
         extract_terrain_phases, initialize_depth_copy_pipeline,
@@ -12,7 +13,7 @@ use crate::{
     terrain_data::{
         AttachmentLabel, GpuTileAtlas, TileAtlas, TileTree, finish_loading, start_loading,
     },
-    terrain_view::TerrainViewComponents,
+    terrain_view::{CullingCamera, TerrainViewComponents},
 };
 use bevy::{
     core_pipeline::{Core3d, Core3dSystems, core_3d::main_opaque_pass_3d, schedule::camera_driver},
@@ -66,9 +67,12 @@ impl Plugin for TerrainPlugin {
         app.add_plugins(BigSpaceDefaultPlugins);
 
         app.add_plugins(RonAssetPlugin::<TerrainConfig>::new(&["tc.ron"]))
+            .add_plugins(RonAssetPlugin::<TerrainProvenance>::new(&["tp.ron"]))
             .init_asset::<TerrainConfig>()
+            .init_asset::<TerrainProvenance>()
             .init_resource::<InternalShaders>()
             .init_resource::<TerrainViewComponents<TileTree>>()
+            .init_resource::<CullingCamera>()
             .init_resource::<TerrainSettings>()
             .init_asset_loader::<TiffLoader>()
             .add_systems(
@@ -77,6 +81,7 @@ impl Plugin for TerrainPlugin {
                     // Todo: enable visibility checking again
                     // check_visibility::<With<TileAtlas>>.in_set(VisibilitySystems::CheckVisibility),
                     (
+                        TileTree::despawn,
                         TileTree::compute_requests,
                         finish_loading,
                         TileAtlas::update,
@@ -104,7 +109,8 @@ impl Plugin for TerrainPlugin {
                 (
                     extract_terrain_phases,
                     GpuTileAtlas::initialize,
-                    GpuTileAtlas::extract.after(GpuTileAtlas::initialize),
+                    GpuTileAtlas::despawn.after(GpuTileAtlas::initialize),
+                    GpuTileAtlas::extract.after(GpuTileAtlas::despawn),
                     GpuTerrain::initialize.after(GpuTileAtlas::initialize),
                     GpuTerrainView::initialize,
                 ),

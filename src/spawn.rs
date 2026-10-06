@@ -9,6 +9,9 @@ use big_space::floating_origins::BigSpace;
 
 #[derive(Clone)]
 pub(crate) struct TerrainToSpawn<M: Material + Clone> {
+    /// Reserved when the spawn was requested, so the caller has an entity to hold on to
+    /// before the config asset has finished loading.
+    terrain: Entity,
     config: Handle<TerrainConfig>,
     view_config: TerrainViewConfig,
     material: M,
@@ -29,6 +32,7 @@ pub(crate) fn spawn_terrains<M: Material>(
 
             commands.queue(move |world: &mut World| {
                 let TerrainToSpawn {
+                    terrain,
                     config,
                     view_config,
                     material,
@@ -55,17 +59,22 @@ pub(crate) fn spawn_terrains<M: Material>(
                     settings,
                 ) = state.get_mut(world).unwrap();
 
+                // The caller may have despawned the reserved entity while the config was
+                // still loading, which is how a spawn is cancelled. Inserting onto it
+                // would be an error, so drop the request instead.
+                if commands.get_entity(terrain).is_err() {
+                    return;
+                }
+
                 let config = configs.get(config.id()).unwrap().clone();
 
                 let root = big_space.single().unwrap();
 
-                let terrain = commands
-                    .spawn((
-                        config.shape.transform(),
-                        TileAtlas::new(&config, &mut buffers, &settings),
-                        MeshMaterial3d(materials.add(material)),
-                    ))
-                    .id();
+                commands.entity(terrain).insert((
+                    config.shape.transform(),
+                    TileAtlas::new(&config, &mut buffers, &settings),
+                    MeshMaterial3d(materials.add(material)),
+                ));
 
                 commands.entity(root).add_child(terrain);
 
@@ -91,13 +100,16 @@ pub(crate) fn spawn_terrains<M: Material>(
 
 pub trait SpawnTerrainCommandsExt<M: Material> {
     // define a method that we will be able to call on `commands`
+    /// Returns the entity the terrain will occupy. It is reserved immediately but stays
+    /// empty until the config asset has loaded, so it carries no terrain components yet.
+    /// Despawning it before then cancels the spawn.
     fn spawn_terrain(
         &mut self,
         config: Handle<TerrainConfig>,
         view_config: TerrainViewConfig,
         material: M,
         view: Entity,
-    );
+    ) -> Entity;
 }
 
 impl<M: Material> SpawnTerrainCommandsExt<M> for Commands<'_, '_> {
@@ -107,17 +119,22 @@ impl<M: Material> SpawnTerrainCommandsExt<M> for Commands<'_, '_> {
         view_config: TerrainViewConfig,
         material: M,
         view: Entity,
-    ) {
+    ) -> Entity {
+        let terrain = self.spawn_empty().id();
+
         self.queue(move |world: &mut World| {
             world
                 .resource_mut::<TerrainsToSpawn<M>>()
                 .0
                 .push(TerrainToSpawn {
+                    terrain,
                     config,
                     view_config,
                     material,
                     view,
                 });
         });
+
+        terrain
     }
 }

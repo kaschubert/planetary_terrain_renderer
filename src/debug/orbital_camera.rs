@@ -1,3 +1,4 @@
+use crate::debug::PointerCapture;
 use crate::picking::PickingData;
 use bevy::{
     color::palettes::basic,
@@ -88,12 +89,13 @@ impl Default for OrbitalCameraController {
 
 #[allow(clippy::too_many_arguments)]
 pub fn orbital_camera_controller(
-    mut gizmos: Gizmos,
+    mut gizmos: Option<Gizmos>,
     grids: Grids,
     time: Res<Time>,
     keyboard: Res<ButtonInput<KeyCode>>,
     mouse_buttons: Res<ButtonInput<MouseButton>>,
     mouse_move: Res<AccumulatedMouseMotion>,
+    capture: Res<PointerCapture>,
     mut camera: Query<(
         Entity,
         &mut Transform,
@@ -136,7 +138,7 @@ pub fn orbital_camera_controller(
     let mut update_cursor_coords = true;
 
     if mouse_buttons.pressed(MouseButton::Left) {
-        if controller.pan_data.is_none() && cursor_position.is_some() {
+        if controller.pan_data.is_none() && cursor_position.is_some() && !capture.blocks_pointer() {
             controller.anchor_position = cursor_position.unwrap();
             controller.anchor_cell = cursor_cell;
             controller.camera_position = camera_position;
@@ -155,7 +157,10 @@ pub fn orbital_camera_controller(
     }
 
     if mouse_buttons.pressed(MouseButton::Middle) {
-        if controller.rotation_data.is_none() && cursor_position.is_some() {
+        if controller.rotation_data.is_none()
+            && cursor_position.is_some()
+            && !capture.blocks_pointer()
+        {
             controller.anchor_position = cursor_position.unwrap();
             controller.anchor_cell = cursor_cell;
             controller.camera_position = camera_position;
@@ -187,7 +192,8 @@ pub fn orbital_camera_controller(
     }
 
     if mouse_buttons.pressed(MouseButton::Right) {
-        if controller.zoom_data.is_none() && cursor_position.is_some() {
+        if controller.zoom_data.is_none() && cursor_position.is_some() && !capture.blocks_pointer()
+        {
             controller.anchor_position = cursor_position.unwrap();
             controller.anchor_cell = cursor_cell;
             controller.camera_position = camera_position;
@@ -345,9 +351,13 @@ pub fn orbital_camera_controller(
 
     let anchor_size = 200.0;
 
-    gizmos.sphere(
-        (controller.anchor_position - grid.cell_to_float(&new_cell)).as_vec3(),
-        new_camera_position.distance(controller.anchor_position) as f32 / anchor_size,
-        basic::GREEN,
-    );
+    // Gizmos come from bevy_gizmos, which an app may run the debug plugin without; then the
+    // anchor is simply not drawn.
+    if let Some(gizmos) = gizmos.as_mut() {
+        gizmos.sphere(
+            (controller.anchor_position - grid.cell_to_float(&new_cell)).as_vec3(),
+            new_camera_position.distance(controller.anchor_position) as f32 / anchor_size,
+            basic::GREEN,
+        );
+    }
 }

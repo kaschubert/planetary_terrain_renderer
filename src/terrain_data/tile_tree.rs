@@ -3,10 +3,11 @@ use crate::{
     render::{TerrainViewUniform, TileTreeUniform},
     terrain::TerrainConfig,
     terrain_data::{INVALID_ATLAS_INDEX, INVALID_LOD, TileAtlas},
-    terrain_view::{TerrainViewComponents, TerrainViewConfig},
+    terrain_view::{CullingCamera, TerrainViewComponents, TerrainViewConfig},
 };
 use bevy::{
     asset::RenderAssetUsages,
+    ecs::entity::EntityHashSet,
     math::{DVec2, DVec3, primitives::ViewFrustum},
     prelude::*,
     render::{
@@ -108,6 +109,8 @@ pub struct TileTree {
     pub(crate) tree_size: u32,
     pub(crate) lod_count: u32,
     pub(crate) shape: TerrainShape,
+    pub(crate) min_height: f32,
+    pub(crate) max_height: f32,
     pub(crate) geometry_tile_count: u32,
     pub(crate) refinement_count: u32,
     pub(crate) grid_size: u32,
@@ -162,10 +165,13 @@ impl TileTree {
         approximate_height_buffer.buffer_description.usage |= BufferUsages::COPY_SRC;
         let approximate_height_buffer = buffers.add(approximate_height_buffer);
 
+        // Parented to the terrain: the readback outlives it otherwise, and its observer
+        // then looks up a tile tree that despawning has already removed.
         commands
             .spawn((
                 TerrainViewKey(terrain_view),
                 Readback::buffer(approximate_height_buffer.clone()),
+                ChildOf(terrain_view.0),
             ))
             .observe(Self::approximate_height_readback);
 
@@ -175,6 +181,8 @@ impl TileTree {
             tree_size: view_config.tree_size,
             lod_count: config.lod_count,
             shape: config.shape,
+            min_height: config.min_height,
+            max_height: config.max_height,
             geometry_tile_count: view_config.geometry_tile_count,
             refinement_count: view_config.refinement_count,
             grid_size: view_config.grid_size,
@@ -257,6 +265,42 @@ impl TileTree {
         tile_local_position.distance(self.view_local_position)
     }
 
+    /// Whether a tile lies entirely outside the view frustum.
+    ///
+    /// Mirrors frustum_cull_aabb in refine_tiles.wgsl, which culls the same tiles for
+    /// drawing. Doing it here as well means they are never loaded in the first place,
+    /// rather than loaded and then discarded by the gpu.
+    ///
+    /// The half spaces are in the view relative space the renderer works in, while tile
+    /// positions are absolute, hence the shift by the view position.
+    fn frustum_cull(&self, tile_coordinate: TileCoordinate) -> bool {
+        let tile_count = (tile_coordinate.lod as f64).exp2();
+
+        let mut aabb_min = Vec3::MAX;
+        let mut aabb_max = Vec3::MIN;
+
+        for (x, y) in iproduct!(0..2, 0..2) {
+            let uv = (tile_coordinate.xy.as_dvec2() + DVec2::new(x as f64, y as f64)) / tile_count;
+            let coordinate = Coordinate::new(tile_coordinate.face, uv);
+
+            for height in [self.min_height, self.max_height] {
+                let position = coordinate.local_position(self.shape, height);
+                let position =
+                    (position - self.view_local_position).as_vec3() + self.view_world_position;
+
+                aabb_min = aabb_min.min(position);
+                aabb_max = aabb_max.max(position);
+            }
+        }
+
+        self.half_spaces.iter().any(|half_space| {
+            let normal = half_space.truncate();
+            let closest_corner = Vec3::select(normal.cmpgt(Vec3::ZERO), aabb_max, aabb_min);
+
+            half_space.dot(closest_corner.extend(1.0)) < 0.0
+        })
+    }
+
     fn update(&mut self) {
         let view_coordinate = Coordinate::from_local_position(self.view_local_position, self.shape);
         self.view_face = view_coordinate.face;
@@ -279,7 +323,11 @@ impl TileTree {
                         self.compute_tile_distance(tile_coordinate, view_coordinate);
                     let load_distance = self.load_distance / (tile_coordinate.lod as f64).exp2();
 
-                    let state = if lod == 0 || tile_distance < load_distance {
+                    // Lod 0 is always kept: it is the fallback the tile tree falls back
+                    // to while anything finer is still loading.
+                    let state = if lod == 0
+                        || (tile_distance < load_distance && !self.frustum_cull(tile_coordinate))
+                    {
                         RequestState::Requested
                     } else {
                         RequestState::Released
@@ -327,6 +375,7 @@ impl TileTree {
         mut tile_trees: ResMut<TerrainViewComponents<TileTree>>,
         grids: Grids,
         views: Query<(&Transform, &CellCoord)>,
+        culling_camera: Res<CullingCamera>,
     ) {
         for (&(_, view), tile_tree) in tile_trees.iter_mut() {
             let camera = camera.get(view).unwrap();
@@ -335,23 +384,60 @@ impl TileTree {
 
             // Todo: transform should be global transform?
 
+            let camera_local_position = grid.grid_position_double(cell, transform);
+
+            // Normally the pose is the camera's own. A detached culling camera keeps an
+            // absolute pose and is re-expressed in render space every frame: the floating
+            // origin follows the rendering camera, so the same absolute point lands on a
+            // different render space position each time the camera crosses a cell.
+            let (view_local_position, view_transform) = match culling_camera.0 {
+                None => (camera_local_position, *transform),
+                Some(pose) => (
+                    pose.position,
+                    Transform {
+                        translation: (pose.position - camera_local_position).as_vec3()
+                            + transform.translation,
+                        rotation: pose.rotation,
+                        scale: Vec3::ONE,
+                    },
+                ),
+            };
+
             let clip_from_view = camera.clip_from_view();
-            let world_from_view = transform.to_matrix();
+            let world_from_view = view_transform.to_matrix();
             let clip_from_world = clip_from_view * world_from_view.inverse();
 
             let half_spaces = ViewFrustum::from_clip_from_world(&clip_from_world)
                 .half_spaces
                 .map(|space| space.normal_d());
 
-            tile_tree.view_local_position = grid.grid_position_double(cell, transform);
-            tile_tree.view_world_position = transform.translation;
+            tile_tree.view_local_position = view_local_position;
+            tile_tree.view_world_position = view_transform.translation;
             tile_tree.half_spaces = half_spaces;
             tile_tree.update();
         }
     }
 
-    /// Adjusts all tile_trees to their corresponding tile atlas
-    /// by updating the entries with the best available tiles.
+    /// Drops the tile trees of terrains that no longer exist.
+    ///
+    /// Every system below looks its terrain up with an unwrap, so a tile tree left behind
+    /// by a despawned terrain panics on the next frame.
+    pub(crate) fn despawn(
+        mut tile_trees: ResMut<TerrainViewComponents<TileTree>>,
+        mut despawned: RemovedComponents<TileAtlas>,
+    ) {
+        // Keyed on removals rather than on which terrains are currently alive: spawning is
+        // deferred through a command, so a terrain can have its tile tree inserted a
+        // moment before its entity appears, and a liveness check would drop it.
+        let despawned = despawned.read().collect::<EntityHashSet>();
+
+        if !despawned.is_empty() {
+            tile_trees.retain(|&(terrain, _view), _| !despawned.contains(&terrain));
+        }
+    }
+
+    /// Adjusts all tile trees to their corresponding tile atlas, by updating the entries
+    /// with the best available tiles.
     pub(crate) fn adjust_to_tile_atlas(
         mut tile_trees: ResMut<TerrainViewComponents<TileTree>>,
         tile_atlases: Query<&TileAtlas>,
@@ -402,8 +488,14 @@ impl TileTree {
         terrain_view: Query<&TerrainViewKey>,
         mut tile_trees: ResMut<TerrainViewComponents<TileTree>>,
     ) {
-        let TerrainViewKey(terrain_view) = terrain_view.get(trigger.event().entity).unwrap();
-        let tile_tree = tile_trees.get_mut(terrain_view).unwrap();
+        let Ok(TerrainViewKey(terrain_view)) = terrain_view.get(trigger.event().entity) else {
+            return;
+        };
+        // A readback in flight when its terrain despawned has nothing left to write to.
+        let Some(tile_tree) = tile_trees.get_mut(terrain_view) else {
+            return;
+        };
+
         tile_tree.approximate_height = trigger.event().to_shader_type();
     }
 }

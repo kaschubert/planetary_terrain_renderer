@@ -183,6 +183,8 @@ impl AttachmentData {
 pub struct AttachmentTile {
     pub(crate) coordinate: TileCoordinate,
     pub(crate) label: AttachmentLabel,
+    /// Which allocation of the coordinate this load belongs to, see TileAtlas::request_tile.
+    pub(crate) generation: u32,
 }
 
 #[derive(Clone)]

@@ -1,36 +1,39 @@
 #!/usr/bin/env bash
 # Download the LINZ open data (https://github.com/linz/imagery,
-# https://github.com/linz/elevation) that beats what download_nz.sh gets for Auckland,
-# one directory per resolution level.
+# https://github.com/linz/elevation) for West and South Auckland, the sheets either side
+# of the one download_auckland.sh covers.
 #
-#   ./download_auckland.sh              # the central Auckland sheet (~84 GiB)
-#   ./download_auckland.sh BA31 BA32    # only the given Topo50 sheets
+#   ./download_auckland_west_south.sh         # both sheets (~27 GiB)
+#   ./download_auckland_west_south.sh BA31    # only the given Topo50 sheets
 #
-# download_nz.sh covers the whole country at 10 m imagery and an 8 m contour-derived DEM.
-# Everything below is finer than that, and each level goes in its own directory:
+# BA31 is West Auckland, from the Waitakere coast across Henderson to the harbour. BB32 is
+# South Auckland, Manukau through Papakura. BB31, the southwest corner between them, is not
+# included by default but works as an argument.
 #
-#   source_data/auckland/height/1m       LiDAR DEM       1 tile    0.4 GiB
-#   source_data/auckland/albedo/0.075m   aerial 2024  1141 tiles  80.5 GiB
-#   source_data/auckland/albedo/0.5m     aerial 2010    20 tiles   3.1 GiB
+#   source_data/auckland_west_south/height/1m      LiDAR DEM    2 tiles   2.4 GiB
+#   source_data/auckland_west_south/albedo/0.25m   aerial 2024 80 tiles  14.3 GiB
+#   source_data/auckland_west_south/albedo/0.5m    aerial 2010 50 tiles   9.9 GiB
 #
-# Tile counts and sizes are for the default sheet. As with Wellington, the two albedo
-# levels are complementary and preprocess_auckland feeds both to one attachment: the
-# 0.075 m survey is the finest published but only reaches 394 km2 of BA32's 864, while the
-# 0.5 m mosaic reaches 691. Without the coarse level the rest of the sheet renders with
-# elevation and no colour. The 0.5 m imagery is from 2010-2012, so it will not match the
-# 2024 colour where they meet; it is filling gaps, not competing.
+# There is no 0.075 m level here, which is the whole reason this is a separate script.
+# The survey covers these sheets - 198 GiB for BA31 and 172 for BB32 - but preprocessing
+# resamples onto a grid of around 0.6 m either way, so those 370 GiB would buy nothing
+# the 0.5 m mosaic does not already give, at more than twice the disk this machine has
+# free. The city centre sheet keeps its 0.075 m because it is one sheet, not three.
 #
-# Auckland is much larger than Wellington: all 22 sheets the 2024 survey covers come to
-# 1.3 TiB at 0.075 m, so the default is the single sheet holding the city centre. The
-# neighbours are big too - BA31 is 185 GiB, AZ31 181, BB32 160 - so add them one at a
-# time and watch the disk.
+# The two albedo levels are complementary and preprocess_auckland feeds both to
+# one attachment, coarser first so the finer wins where they overlap. The 2010 mosaic
+# covers both sheets completely; the 2024 survey adds current colour over 639 km2 of
+# BA31's 864 but only 52 km2 of BB32, so most of South Auckland renders from the older
+# imagery. Expect a visible seam where the two eras meet.
 #
-# Note that auckland_2024_0.25m, the obvious region-wide filler, does NOT cover BA32. It
-# spans AZ30, AZ31, BA30, BA31, BB30, BB31 and BB32 only, which is why the 0.5 m mosaic is
-# used here instead.
+# The 0.25 m survey needs colour matching against the 0.075 m one the centre sheet uses,
+# which is a separate step because it is a property of those two surveys rather than of the
+# download. Run it once after this, before preprocessing:
+#
+#   ./colour_match.sh source_data/auckland_west_south/albedo/0.25m 1.012 0.942 0.823
 #
 # Both buckets are public (AWS Open Data) and tiles share Topo50 sheet names, either whole
-# (BA32.tiff, elevation) or subdivided (BA32_1000_0101.tiff, imagery). Downloads are
+# (BA31.tiff, elevation) or subdivided (BA31_5000_0101.tiff, imagery). Downloads are
 # resumable and safe to interrupt: rclone compares size and ETag, so truncated tiles are
 # re-fetched instead of being mistaken for complete ones.
 #
@@ -62,7 +65,7 @@ for arg in "$@"; do
 done
 
 if ((${#SHEETS[@]} == 0)); then
-    SHEETS=(BA32) # the sheet holding the Auckland city centre
+    SHEETS=(BA31 BB32) # west, south
 fi
 
 CONFIG="$DIR/rclone.conf"
@@ -72,7 +75,7 @@ HEIGHT_LEVELS=(
     "1m      nz:nz-elevation/new-zealand/new-zealand/dem_1m/2193"
 )
 ALBEDO_LEVELS=(
-    "0.075m  nz:nz-imagery/auckland/auckland_2024_0.075m/rgb/2193"
+    "0.25m   nz:nz-imagery/auckland/auckland_2024_0.25m/rgb/2193"
     "0.5m    nz:nz-imagery/auckland/auckland_2010-2012_0.5m/rgb/2193"
 )
 
@@ -112,7 +115,7 @@ fetch_levels() { # <attachment> <level spec>...
     for spec in "$@"; do
         read -r level src <<<"$spec"
         echo "== $attachment $level"
-        fetch "$src" "$DIR/source_data/auckland/$attachment/$level" \
+        fetch "$src" "$DIR/source_data/auckland_west_south/$attachment/$level" \
             "$attachment" "$level"
     done
 }

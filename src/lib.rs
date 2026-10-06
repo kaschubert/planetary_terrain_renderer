@@ -49,6 +49,7 @@ pub mod math;
 pub mod picking;
 pub mod plugin;
 pub mod preprocess;
+pub mod provenance;
 pub mod render;
 pub mod shaders;
 pub mod spawn;
@@ -64,11 +65,14 @@ pub mod prelude {
     pub use crate::{
         debug::{
             DebugCameraController, DebugTerrainMaterial, LoadingImages, OrbitalCameraController,
-            TerrainDebugPlugin,
+            PointerCapture, TerrainDebugPlugin,
         },
         math::{TerrainShape, TileCoordinate},
         picking::{PickingData, TerrainPickingPlugin},
         plugin::{TerrainPlugin, TerrainSettings},
+        provenance::{
+            MANIFEST_FILE, PROVENANCE_FILE, SourceManifest, SourceRecord, TerrainProvenance,
+        },
         // preprocess::{PreprocessDataset, Preprocessor, SphericalDataset, TerrainPreprocessPlugin},
         render::TerrainMaterialPlugin,
         spawn::SpawnTerrainCommandsExt,
@@ -76,7 +80,7 @@ pub mod prelude {
         terrain_data::{
             AttachmentConfig, AttachmentFormat, AttachmentLabel, GpuTileAtlas, TileAtlas, TileTree,
         },
-        terrain_view::{TerrainViewComponents, TerrainViewConfig},
+        terrain_view::{CullingCamera, CullingPose, TerrainViewComponents, TerrainViewConfig},
     };
     pub use big_space::{commands::BigSpaceCommands, grid::Grid};
 }

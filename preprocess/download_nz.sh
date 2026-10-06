@@ -17,10 +17,29 @@
 # Requires rclone (sudo apt install rclone). The remote is defined in the
 # rclone.conf next to this script, so no AWS credentials and no configuration
 # in your home directory are needed.
+#
+# Each level directory gets a manifest.ron recording the bucket path its tiles came from,
+# the survey and its capture date, the sheets on disk and the tile count. The preprocessor
+# carries it into the terrain, which otherwise has no way to say what it is showing. Pass
+# --manifest-only to write manifests for tiles already downloaded, without fetching.
 set -euo pipefail
 
 DIR="$(cd "$(dirname "$0")" && pwd)"
-SHEETS=("$@")
+
+source "$DIR/manifest.sh"
+
+MANIFEST_ONLY=0
+SHEETS=()
+
+# The flag may come anywhere among the sheets. Any other option is a typo; the rest are
+# sheet names.
+for arg in "$@"; do
+    case $arg in
+        --manifest-only) MANIFEST_ONLY=1 ;;
+        -*) echo "unknown option $arg" >&2; exit 1 ;;
+        *) SHEETS+=("$arg") ;;
+    esac
+done
 
 CONFIG="$DIR/rclone.conf"
 IMAGERY="nz:nz-imagery/new-zealand/new-zealand_2024-2025_10m/rgb/2193"
@@ -42,15 +61,23 @@ filters() { # restrict to .tiff, and to the requested Topo50 sheets if any
     fi
 }
 
-fetch() { # <src> <dest>
-    local src=$1 dest=$2 filter
+fetch() { # <src> <dest> <attachment> [level]
+    local src=$1 dest=$2 attachment=$3 level=${4-} filter
     mkdir -p "$dest"
+
+    if ((MANIFEST_ONLY)); then
+        # Backfilling a directory that is already downloaded. Every figure in a manifest is
+        # read off the disk, so there is nothing to fetch to write one.
+        write_manifest "$dest" "$src" "$attachment" "$level"
+        return
+    fi
+
     mapfile -t filter < <(filters)
     # copy, never sync: a filtered run must not delete sheets fetched earlier.
     rclone --config "$CONFIG" copy "$src" "$dest" "${filter[@]}" \
         --transfers 8 --checkers 16 --retries 3 --progress
-    echo "$dest: $(find "$dest" -name '*.tiff' | wc -l) tiles"
+    write_manifest "$dest" "$src" "$attachment" "$level"
 }
 
-fetch "$ELEVATION" "$DIR/source_data/nz/height"
-fetch "$IMAGERY" "$DIR/source_data/nz/albedo"
+fetch "$ELEVATION" "$DIR/source_data/nz/height" height
+fetch "$IMAGERY" "$DIR/source_data/nz/albedo" albedo

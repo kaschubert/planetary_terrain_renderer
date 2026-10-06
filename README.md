@@ -47,7 +47,7 @@ and the framework is evaluated using multiple datasets.
 To try out the terrain renderer, you first have to preprocess your dataset (GeoTIFF).
 Some example datasets are available [here](https://drive.proton.me/urls/ZRDAC9SWTM#IxwKkKWSBgnV).
 Use the preprocess CLI or a prepared configuration in the `preprocess/examples` directory.
-Then run the `examples/spherical.rs` demo with the preprocessed dataset selected.
+Then run the `examples/spherical/spherical.rs` demo with the preprocessed dataset selected.
 The default path for the datasets is `source_data`.
 
 ## Run exclusively on Vulkan
@@ -80,6 +80,10 @@ using only the mouse.
 
 ### Visualization Toggles
 
+- `F1` - toggle this list of controls inside the app
+- `F2` - toggle the table of where each terrain's data came from
+- `F3` - toggle the Topo50 sheet grid over the terrain, coloured by the finest imagery downloaded, as does `show grid` in the F2 panel
+- Mouse wheel - raise or lower the sheet grid, once `wheel sets height` is ticked in the F2 panel
 - `W` - toggle wireframe view
 - `L` - toggle terrain data LOD view
 - `Y` - toggle terrain geometry LOD view
@@ -94,6 +98,7 @@ using only the mouse.
 - `G` - toggle texture sampling using gradients
 - `H` - toggle high precision coordinates
 - `F` - toggle freeze view frustum
+- Hold `Ctrl` - detach the culling camera: the terrain keeps loading and culling for the pose you had, while you fly off to look at it from outside
 - `D` - toggle surface approximation debug
 
 ### Quality Adjustments

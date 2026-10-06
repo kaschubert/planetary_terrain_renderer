@@ -1,5 +1,5 @@
 use gdal::errors::GdalError;
-use std::num::ParseFloatError;
+use std::{num::ParseFloatError, path::PathBuf};
 use thiserror::Error;
 
 #[derive(Error, Debug, Clone)]
@@ -15,6 +15,8 @@ pub enum PreprocessError {
          so it cannot be rebuilt per thread"
     )]
     AxisMappingNotPreserved,
+    #[error("{path}: {message}")]
+    Manifest { path: PathBuf, message: String },
     #[error("GDAL error")]
     Gdal(#[from] GdalError),
     #[error("Parse error")]
