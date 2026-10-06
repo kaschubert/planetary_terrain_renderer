@@ -89,7 +89,7 @@ impl Default for OrbitalCameraController {
 
 #[allow(clippy::too_many_arguments)]
 pub fn orbital_camera_controller(
-    mut gizmos: Gizmos,
+    mut gizmos: Option<Gizmos>,
     grids: Grids,
     time: Res<Time>,
     keyboard: Res<ButtonInput<KeyCode>>,
@@ -351,9 +351,13 @@ pub fn orbital_camera_controller(
 
     let anchor_size = 200.0;
 
-    gizmos.sphere(
-        (controller.anchor_position - grid.cell_to_float(&new_cell)).as_vec3(),
-        new_camera_position.distance(controller.anchor_position) as f32 / anchor_size,
-        basic::GREEN,
-    );
+    // Gizmos come from bevy_gizmos, which an app may run the debug plugin without; then the
+    // anchor is simply not drawn.
+    if let Some(gizmos) = gizmos.as_mut() {
+        gizmos.sphere(
+            (controller.anchor_position - grid.cell_to_float(&new_cell)).as_vec3(),
+            new_camera_position.distance(controller.anchor_position) as f32 / anchor_size,
+            basic::GREEN,
+        );
+    }
 }

@@ -10,7 +10,7 @@ const DEBUG_SCALE: f32 = 1.0 / (1 << 5) as f32;
 
 pub(crate) fn debug_surface_approximation(
     mut enable: Local<bool>,
-    mut gizmos: Gizmos,
+    gizmos: Option<Gizmos>,
     tile_trees: Res<TerrainViewComponents<TileTree>>,
     input: Res<ButtonInput<KeyCode>>,
 ) {
@@ -21,6 +21,12 @@ pub(crate) fn debug_surface_approximation(
     if !*enable {
         return;
     }
+
+    // Gizmos come from bevy_gizmos, which an app may run the debug plugin without; then
+    // there is nothing to draw with, and D toggles nothing visible.
+    let Some(mut gizmos) = gizmos else {
+        return;
+    };
 
     for tile_tree in tile_trees.values() {
         let shape = tile_tree.shape;
