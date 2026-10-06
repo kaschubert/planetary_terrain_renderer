@@ -52,13 +52,17 @@ DIR="$(cd "$(dirname "$0")" && pwd)"
 source "$DIR/manifest.sh"
 
 MANIFEST_ONLY=0
+SHEETS=()
 
-if [[ ${1-} == --manifest-only ]]; then
-    MANIFEST_ONLY=1
-    shift
-fi
-
-SHEETS=("$@")
+# The flag may come anywhere among the sheets. Any other option is a typo; the rest are
+# sheet names.
+for arg in "$@"; do
+    case $arg in
+        --manifest-only) MANIFEST_ONLY=1 ;;
+        -*) echo "unknown option $arg" >&2; exit 1 ;;
+        *) SHEETS+=("$arg") ;;
+    esac
+done
 
 if ((${#SHEETS[@]} == 0)); then
     SHEETS=(BA31 BB32) # west, south
