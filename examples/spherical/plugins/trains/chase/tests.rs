@@ -222,6 +222,23 @@ fn the_icon_follows_its_train_and_lets_go_of_the_train_already_followed() {
     assert_eq!(follow_or_let_go(Some(two), two), None);
 }
 
+/// From a free camera the orbit starts behind at the default distance; from another train
+/// it keeps that train's zoom and starts over on the turn and the tilt.
+#[test]
+fn switching_trains_keeps_the_zoom_and_a_fresh_attach_starts_behind() {
+    assert_eq!(orbit_on_attach(None), Orbit::default());
+
+    let mut drawn_in = Orbit::default();
+    drawn_in.zoom(-1.0);
+    drawn_in.turn(Vec2::new(200.0, -50.0));
+    assert_ne!(drawn_in.distance, Orbit::default().distance);
+
+    let next = orbit_on_attach(Some(&drawn_in));
+    assert_eq!(next.distance, drawn_in.distance);
+    assert_eq!(next.yaw, Orbit::default().yaw);
+    assert_eq!(next.pitch, Orbit::default().pitch);
+}
+
 /// The default orbit is CHASE_BACK behind and CHASE_UP above. A quarter turn to the right
 /// puts the eye out to the carriage's right at the same distance and height, square to the
 /// line, with the carriage still in the view; a quarter turn the other way, to its left.

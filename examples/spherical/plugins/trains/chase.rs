@@ -112,7 +112,8 @@ impl Plugin for ChaseCameraPlugin {
 
 /// Where the eye sits round the carriage: turned round the carriage's up from straight
 /// behind, tilted above its level, and at a distance. The default is straight behind at the
-/// pitch and distance CHASE_BACK and CHASE_UP make, and every attach starts there.
+/// pitch and distance CHASE_BACK and CHASE_UP make, and an attach from a free camera starts
+/// there; a switch from one train to another keeps the distance, see orbit_on_attach.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct Orbit {
     /// Radians round the carriage's up from straight behind it, positive towards its right.
@@ -227,6 +228,21 @@ pub fn follow_or_let_go(following: Option<Entity>, clicked: Entity) -> Option<En
     }
 }
 
+/// The orbit a train is attached at: from a free camera, the default, straight behind; from
+/// another train, the default at the distance the orbit had, so a viewer who has drawn in
+/// to read one carriage reads the next from as close, and one who has drawn out to see a
+/// line sees the next train's line too. The turn and the tilt start over, since they were
+/// about the other train.
+pub fn orbit_on_attach(previous: Option<&Orbit>) -> Orbit {
+    match previous {
+        Some(orbit) => Orbit {
+            distance: orbit.distance,
+            ..Orbit::default()
+        },
+        None => Orbit::default(),
+    }
+}
+
 /// The rotation that looks from one position at another with the up given, as a Transform's
 /// looking_at does, in f64: local -Z towards the target, local X level across the up, and
 /// local Y what is left, which leans back from the up by the pitch.
@@ -316,15 +332,17 @@ fn press_follow_buttons(
         match follow_or_let_go(chase.following, carriage) {
             Some(carriage) => {
                 // Switching trains keeps what was found at the first attach, since the
-                // controller is off now by the chase's own hand.
-                let orbital_was_on = if chase.following.is_some() {
-                    chase.orbital_was_on
+                // controller is off now by the chase's own hand, and keeps the zoom, see
+                // orbit_on_attach.
+                let (orbital_was_on, orbit) = if chase.following.is_some() {
+                    (chase.orbital_was_on, orbit_on_attach(Some(&chase.orbit)))
                 } else {
-                    orbital.enabled
+                    (orbital.enabled, orbit_on_attach(None))
                 };
                 *chase = ChaseCamera {
                     following: Some(carriage),
                     orbital_was_on,
+                    orbit,
                     ..default()
                 };
                 orbital.enabled = false;
