@@ -254,18 +254,24 @@ pub fn toggle_debug(input: Res<ButtonInput<KeyCode>>, mut debug: ResMut<DebugTer
     }
 }
 
-/// Detaches the culling camera from the rendering camera while Ctrl is held.
+/// Detaches the culling camera from the rendering camera while C is held.
 ///
-/// The terrain keeps loading, refining and culling for the pose the camera had when Ctrl
-/// went down, and the camera itself can be flown away to look at that footprint from
-/// outside. Letting go reattaches it to wherever the camera is by then.
+/// The terrain keeps loading, refining and culling for the pose the camera had when C went
+/// down, and the camera itself can be flown away to look at that footprint from outside.
+/// Letting go reattaches it to wherever the camera is by then.
+///
+/// It was Ctrl, which left the example's Ctrl chords detaching the camera and saying so on
+/// the console on their way through. C is free: nothing else binds it but the Metal frame
+/// capture, which is macOS only and behind a feature this never builds with. Ctrl keeps
+/// standing the letter toggles aside, see toggle_debug, which is what the chords need from
+/// it; it just no longer does anything of its own.
 pub fn detach_culling_camera(
     input: Res<ButtonInput<KeyCode>>,
     mut culling_camera: ResMut<CullingCamera>,
     grids: Grids,
     camera: Query<(Entity, &Transform, &CellCoord), With<Camera3d>>,
 ) {
-    let held = input.pressed(KeyCode::ControlLeft) || input.pressed(KeyCode::ControlRight);
+    let held = input.pressed(KeyCode::KeyC);
 
     match (held, culling_camera.0.is_some()) {
         (true, false) => {

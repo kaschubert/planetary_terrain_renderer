@@ -100,7 +100,8 @@ using only the mouse.
 - `G` - toggle texture sampling using gradients
 - `H` - toggle high precision coordinates
 - `F` - toggle freeze view frustum
-- Hold `Ctrl` - detach the culling camera: the terrain keeps loading and culling for the pose you had, while you fly off to look at it from outside; the letter toggles stand aside while it is held, so Ctrl+S, Ctrl+Z and Ctrl+Y reach the rail editor, at the cost of two lines on the console per chord
+- Hold `C` - detach the culling camera: the terrain keeps loading and culling for the pose you had, while you fly off to look at it from outside
+- Hold `Ctrl` - stand aside, so the example's chords get through: the letter toggles do not fire, so Ctrl+S, Ctrl+Z and Ctrl+Y reach the rail editor, and the left button does not pan, so a Ctrl+click is a click and not a drag
 - `D` - toggle surface approximation debug
 
 ### Rail Editor

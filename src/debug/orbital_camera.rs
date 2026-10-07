@@ -162,7 +162,13 @@ pub fn orbital_camera_controller(
 
     let mut update_cursor_coords = true;
 
-    if mouse_buttons.pressed(MouseButton::Left) {
+    // Control hands the left button to the app: a Ctrl+click is a chord of its own, as Ctrl+S and
+    // Ctrl+Z are of the keys, so the camera leaves the button alone while it is held rather than
+    // panning under the click. The same standing aside the letter toggles do, see toggle_debug.
+    // Nothing claims Control with the other two buttons, so those run as ever.
+    let chord = keyboard.pressed(KeyCode::ControlLeft) || keyboard.pressed(KeyCode::ControlRight);
+
+    if mouse_buttons.pressed(MouseButton::Left) && !chord {
         if controller.pan_data.is_none() && cursor_position.is_some() && !capture.blocks_pointer() {
             controller.anchor_position = cursor_position.unwrap();
             controller.anchor_cell = cursor_cell;
@@ -259,9 +265,11 @@ pub fn orbital_camera_controller(
             data.target_zoom -= notches * ZOOM_PER_NOTCH;
             data.zoom = data.zoom.lerp(data.target_zoom, smoothing);
         }
-    } else if mouse_buttons.pressed(MouseButton::Left) || mouse_buttons.pressed(MouseButton::Right)
+    } else if (mouse_buttons.pressed(MouseButton::Left) && !chord)
+        || mouse_buttons.pressed(MouseButton::Right)
     {
-        // A pan or a rotate starting takes over from a wheel zoom still easing in.
+        // A pan or a rotate starting takes over from a wheel zoom still easing in. A held
+        // Control starts no pan, see above, so it does not cut an easing zoom short either.
         controller.zoom_data = None;
     } else if let Some(data) = controller
         .zoom_data
