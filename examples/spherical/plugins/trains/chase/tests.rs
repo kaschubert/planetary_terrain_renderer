@@ -306,10 +306,10 @@ fn a_drag_turns_and_tilts_the_orbit_within_its_limits() {
     assert_eq!(orbit.distance, Orbit::default().distance);
 }
 
-/// Zooming scales the distance, so the wheel feels the same near and far, and stops at the
-/// limits: five notches double it, as 140 px of drag do.
+/// Zooming scales the distance, so the wheel feels the same near and far, and stops only at
+/// the near limit: five notches double it, as 140 px of drag do.
 #[test]
-fn zooming_scales_the_distance_within_its_limits() {
+fn zooming_scales_the_distance_and_stops_only_at_the_near_limit() {
     let mut orbit = Orbit::default();
     let start = orbit.distance;
     orbit.zoom(2.0_f64.ln());
@@ -331,8 +331,10 @@ fn zooming_scales_the_distance_within_its_limits() {
         orbit.distance / start
     );
 
+    // Out without limit: a hundred e-foldings is a long way past the planet.
     orbit.zoom(100.0);
-    assert_eq!(orbit.distance, DISTANCE_METRES.1);
-    orbit.zoom(-100.0);
-    assert_eq!(orbit.distance, DISTANCE_METRES.0);
+    assert!(orbit.distance > 1.0e40, "{}", orbit.distance);
+    assert!(orbit.distance.is_finite());
+    orbit.zoom(-200.0);
+    assert_eq!(orbit.distance, NEAREST_METRES);
 }

@@ -75,9 +75,10 @@ pub const TURN_PER_PIXEL: f64 = 0.005;
 /// view no bearing to keep the carriage in its lower half by.
 pub const PITCH_DEGREES: (f64, f64) = (5.0, 85.0);
 
-/// How near and how far the eye may be, in metres. Nearer than 20 m a 24 m carriage no longer
-/// fits the view; at 3 km it is a dot and the orbital camera is the tool from there.
-pub const DISTANCE_METRES: (f64, f64) = (20.0, 3000.0);
+/// How near the eye may be, in metres: nearer than 20 m a 24 m carriage no longer fits the
+/// view. There is no far limit; drawn out far enough the carriage is a dot on its line and
+/// the line a thread across the city, which is a view of its own.
+pub const NEAREST_METRES: f64 = 20.0;
 
 /// What a pixel of drag with the middle button, and a notch of the wheel, do to the distance,
 /// as exponents of e: 140 px of drag or five notches double it or halve it, a touch finer
@@ -120,7 +121,7 @@ pub struct Orbit {
     pub yaw: f64,
     /// Radians above the carriage's level, within PITCH_DEGREES.
     pub pitch: f64,
-    /// Metres from the carriage to the eye, within DISTANCE_METRES.
+    /// Metres from the carriage to the eye, NEAREST_METRES at least.
     pub distance: f64,
 }
 
@@ -144,10 +145,10 @@ impl Orbit {
             .clamp(PITCH_DEGREES.0.to_radians(), PITCH_DEGREES.1.to_radians());
     }
 
-    /// Scales the distance by e to the exponent, within DISTANCE_METRES: positive draws out.
+    /// Scales the distance by e to the exponent, no nearer than NEAREST_METRES: positive
+    /// draws out.
     pub fn zoom(&mut self, exponent: f64) {
-        self.distance =
-            (self.distance * exponent.exp()).clamp(DISTANCE_METRES.0, DISTANCE_METRES.1);
+        self.distance = (self.distance * exponent.exp()).max(NEAREST_METRES);
     }
 }
 

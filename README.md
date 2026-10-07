@@ -132,7 +132,7 @@ One carriage per line drives itself along the drawn track, end to end and back a
 - `F8` - toggle the live feed: on, one carriage per train Auckland Transport reports, where it reports it; off, the stand-ins; nothing without `AT_API_KEY`
 - Camera icon in the trains table - follow that train with a chase camera, from behind, or at the zoom you had when switching from another train; click it again, press `Escape`, `T`, `R` or a fly key, or hide the trains to let go
 - Drag with the left or right button while following - orbit the camera round the train, right to go round its right and up to look down on it
-- Mouse wheel, or drag with the middle button, while following - zoom in and out, between 20 m and 3 km
+- Mouse wheel, or drag with the middle button, while following - zoom in and out, no nearer than 20 m and as far as you like
 
 ### Quality Adjustments
 
