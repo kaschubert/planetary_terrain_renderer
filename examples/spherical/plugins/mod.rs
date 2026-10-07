@@ -8,6 +8,7 @@ pub mod provenance;
 pub mod rail_editor;
 pub mod shared;
 pub mod sheet_grid;
+pub mod stations;
 pub mod track_frames;
 pub mod trains;
 pub mod vram_usage;

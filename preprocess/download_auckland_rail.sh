@@ -23,10 +23,17 @@
 # The shapes are dense, a point every few metres, which is far more than a line on the
 # terrain can show. They are simplified to within a metre, which leaves a few hundred
 # points per line.
+#
+# Also writes auckland_stations.csv beside it: the train stations and their platforms, for
+# the labels on the map and for turning the realtime feed's stop ids into names. A station
+# is a parent stop named "... Train Station" and its platforms are the stops under it; the
+# name goes last in the row so it may hold a comma. That file is never edited by hand, so it
+# is written every time.
 set -euo pipefail
 
 DIR="$(cd "$(dirname "$0")" && pwd)"
 OUT="$DIR/../examples/spherical/plugins/auckland_rail/auckland_rail.csv"
+STATIONS_OUT="$DIR/../examples/spherical/plugins/auckland_rail/auckland_stations.csv"
 FEED="https://gtfs.at.govt.nz/gtfs.zip"
 
 # The edits are the valuable part; the feed can always be fetched again.
@@ -42,16 +49,16 @@ trap 'rm -rf "$WORK"' EXIT
 
 echo "== fetching $FEED"
 curl -sSL --fail -o "$WORK/gtfs.zip" "$FEED"
-unzip -q "$WORK/gtfs.zip" feed_info.txt routes.txt trips.txt shapes.txt -d "$WORK"
+unzip -q "$WORK/gtfs.zip" feed_info.txt routes.txt trips.txt shapes.txt stops.txt -d "$WORK"
 
-python3 - "$WORK" "$OUT" "$FEED" "$(basename "$0")" <<'PYTHON_EOF'
+python3 - "$WORK" "$OUT" "$FEED" "$(basename "$0")" "$STATIONS_OUT" <<'PYTHON_EOF'
 import csv
 import math
 import sys
 from collections import Counter
 from datetime import date
 
-work, out, feed, script = sys.argv[1:5]
+work, out, feed, script, stations_out = sys.argv[1:6]
 
 def rows(name):
     with open(f"{work}/{name}", encoding="utf-8-sig", newline="") as file:
@@ -150,4 +157,36 @@ with open(out, "w", encoding="utf-8", newline="\n") as file:
 for route, shape, sign, count, kept in lines:
     print(f"{route['route_short_name']}: {count} points to {len(kept)}, {sign}")
 print(f"wrote {out}")
+
+# The stations: the parent stops named as stations, which leaves out Te Huia's Waikato
+# stations and the bus stops beside stations, and the platforms under them, which are what
+# a trip update names. Each station is followed by its platforms.
+stops = list(rows("stops.txt"))
+stations = {
+    s["stop_id"]: s
+    for s in stops
+    if s["location_type"] == "1" and s["stop_name"].endswith(" Train Station")
+}
+platforms = [s for s in stops if s["location_type"] == "0" and s.get("parent_station") in stations]
+
+def stop_row(stop, parent):
+    return (
+        f"{stop['stop_id']},{parent},{stop['stop_code']},"
+        f"{float(stop['stop_lat']):.5f},{float(stop['stop_lon']):.5f},{stop['stop_name']}\n"
+    )
+
+with open(stations_out, "w", encoding="utf-8", newline="\n") as file:
+    file.write(f"# Auckland's train stations and their platforms, from Auckland Transport's GTFS feed {feed}\n")
+    file.write(f"# Written by preprocess/{script} on {date.today().isoformat()}, feed version {version}\n")
+    file.write(
+        f"# {len(stations)} stations, each followed by its platforms, {len(platforms)} platforms in all.\n"
+        "# A platform's parent is its station's stop_id; a station's is blank. The name is last so it may hold a comma.\n"
+    )
+    file.write("stop_id,parent,code,latitude,longitude,name\n")
+    for station in sorted(stations.values(), key=lambda s: s["stop_name"]):
+        file.write(stop_row(station, ""))
+        under = [p for p in platforms if p["parent_station"] == station["stop_id"]]
+        for platform in sorted(under, key=lambda p: p["stop_id"]):
+            file.write(stop_row(platform, station["stop_id"]))
+print(f"{len(stations)} stations with {len(platforms)} platforms, wrote {stations_out}")
 PYTHON_EOF

@@ -43,6 +43,16 @@ fn a_cell_is_its_column_and_the_names_are_folded_to_the_font() {
     assert_eq!(cell_text(Column::Unit, "S-C", &train), "AMP 1142");
     assert_eq!(cell_text(Column::Km, "S-C", &train), "0.5");
     assert_eq!(cell_text(Column::Speed, "S-C", &train), "72");
+    assert_eq!(cell_text(Column::Next, "S-C", &train), "");
+    assert_eq!(cell_text(Column::Late, "S-C", &train), "");
+
+    let due = Train {
+        next_stop: Some("Te Waihorotiu\u{2013}2".to_string()),
+        delay: Some(130.0),
+        ..train.clone()
+    };
+    assert_eq!(cell_text(Column::Next, "S-C", &due), "Te Waihorotiu-2");
+    assert_eq!(cell_text(Column::Late, "S-C", &due), "+2 min");
 
     let back = Train {
         direction: -1.0,
@@ -53,6 +63,17 @@ fn a_cell_is_its_column_and_the_names_are_folded_to_the_font() {
     // A stand-in has no unit, and the column is blank for it.
     assert_eq!(cell_text(Column::Unit, "S-C", &Train::stand_in(0)), "");
     assert_eq!(Column::ALL.len() + 1, HEADINGS.len());
+}
+
+#[test]
+fn how_late_reads_in_whole_minutes_and_within_a_minute_is_on_time() {
+    assert_eq!(late_text(None), "");
+    assert_eq!(late_text(Some(0.0)), "on time");
+    assert_eq!(late_text(Some(59.0)), "on time");
+    assert_eq!(late_text(Some(-59.0)), "on time");
+    assert_eq!(late_text(Some(60.0)), "+1 min");
+    assert_eq!(late_text(Some(130.0)), "+2 min");
+    assert_eq!(late_text(Some(-106.0)), "-1 min");
 }
 
 #[test]

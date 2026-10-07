@@ -13,12 +13,19 @@
 //! padded with runs of spaces, "AMP        1142". A bearing of exactly nought is taken as
 //! none, since a unit that has not sent one reads that way, and a train heading due north
 //! is told by the fixes either side of it instead.
+//!
+//! The trip updates feed, fetched the same way, carries per trip how late it runs and the
+//! stop it calls at next, as one stop time update where the specification has a list of
+//! them, with the trip id the positions feed names too, which is how the two are joined.
 
 use serde::{Deserialize, Deserializer};
 use std::time::Duration;
 
-/// The endpoint, see the AT developer portal. The key goes in the header below.
+/// The positions endpoint, see the AT developer portal. The key goes in the header below.
 pub const URL: &str = "https://api.at.govt.nz/realtime/legacy/vehiclelocations";
+
+/// The trip updates endpoint, beside it.
+pub const UPDATES_URL: &str = "https://api.at.govt.nz/realtime/legacy/tripupdates";
 
 /// The header the subscription key is sent in, as the portal has it.
 pub const KEY_HEADER: &str = "Ocp-Apim-Subscription-Key";
@@ -43,6 +50,8 @@ pub struct Feed {
 pub struct Vehicle {
     /// The unit, see unit_name.
     pub id: String,
+    /// The trip the vehicle is on, None off one: the join to its trip update.
+    pub trip_id: Option<String>,
     /// The route the vehicle's trip is on, None off a trip; see line_name.
     pub route_id: Option<String>,
     pub latitude: f64,
@@ -55,38 +64,53 @@ pub struct Vehicle {
     pub at: f64,
 }
 
-/// Fetches the feed with the key and parses it. The error is the message the caption shows:
-/// ureq's for a status outside 2xx, "http status: 401" for a key the portal does not know,
-/// or for a connection that failed, and parse's for a body that is not the feed.
+/// Fetches the positions feed with the key and parses it. The error is the message the
+/// caption shows: ureq's for a status outside 2xx, "http status: 401" for a key the portal
+/// does not know, or for a connection that failed, and parse's for a body that is not the
+/// feed.
 pub fn fetch(key: &str) -> Result<Feed, String> {
+    parse(&get(key, URL)?)
+}
+
+/// Fetches the trip updates feed with the key and parses it; the errors are fetch's.
+pub fn fetch_updates(key: &str) -> Result<TripUpdates, String> {
+    parse_updates(&get(key, UPDATES_URL)?)
+}
+
+/// The body of a URL fetched with the key.
+fn get(key: &str, url: &str) -> Result<String, String> {
     let agent: ureq::Agent = ureq::Agent::config_builder()
         .timeout_global(Some(Duration::from_secs(TIMEOUT_SECONDS)))
         .build()
         .into();
     let mut response = agent
-        .get(URL)
+        .get(url)
         .header(KEY_HEADER, key)
         .call()
         .map_err(|error| error.to_string())?;
-    let body = response
+
+    response
         .body_mut()
         .read_to_string()
-        .map_err(|error| format!("the body did not arrive whole: {error}"))?;
-
-    parse(&body)
+        .map_err(|error| format!("the body did not arrive whole: {error}"))
 }
 
-/// The feed from its JSON, with or without AT's envelope round it.
-pub fn parse(json: &str) -> Result<Feed, String> {
+/// A feed's JSON as the value inside AT's envelope, or as it is when there is none.
+fn unwrap_envelope(json: &str) -> Result<serde_json::Value, String> {
     let value: serde_json::Value =
         serde_json::from_str(json).map_err(|error| format!("the feed is not JSON: {error}"))?;
-    let feed = match value {
+
+    Ok(match value {
         serde_json::Value::Object(mut envelope) if envelope.contains_key("response") => {
             envelope.remove("response").unwrap_or_default()
         }
         value => value,
-    };
-    let raw: RawFeed = serde_json::from_value(feed)
+    })
+}
+
+/// The positions feed from its JSON, with or without AT's envelope round it.
+pub fn parse(json: &str) -> Result<Feed, String> {
+    let raw: RawFeed = serde_json::from_value(unwrap_envelope(json)?)
         .map_err(|error| format!("the feed is not the shape expected: {error}"))?;
 
     let vehicles = raw
@@ -98,10 +122,12 @@ pub fn parse(json: &str) -> Result<Feed, String> {
             let position = vehicle.position?;
             let descriptor = vehicle.vehicle?;
             let id = descriptor.id?;
+            let trip = vehicle.trip.unwrap_or_default();
 
             Some(Vehicle {
                 id: unit_name(descriptor.label.as_deref(), &id),
-                route_id: vehicle.trip.and_then(|trip| trip.route_id),
+                trip_id: trip.trip_id,
+                route_id: trip.route_id,
                 latitude: position.latitude,
                 longitude: position.longitude,
                 bearing: position.bearing.filter(|&bearing| bearing != 0.0),
@@ -114,6 +140,70 @@ pub fn parse(json: &str) -> Result<Feed, String> {
     Ok(Feed {
         header_at: raw.header.timestamp,
         vehicles,
+    })
+}
+
+/// One fetch of the trip updates feed, reduced to what the trains want.
+#[derive(Debug, Clone, PartialEq)]
+pub struct TripUpdates {
+    /// The feed's own timestamp for the fetch, as Feed has it.
+    pub header_at: f64,
+    pub updates: Vec<TripUpdate>,
+}
+
+/// One trip's update: how late it runs and where it calls next.
+#[derive(Debug, Clone, PartialEq)]
+pub struct TripUpdate {
+    /// The trip, which the positions feed names too: the join between the two.
+    pub trip_id: Option<String>,
+    /// The unit, see unit_name, for a position that names no trip; empty where the update
+    /// names no vehicle.
+    pub id: String,
+    /// Seconds behind the timetable, positive late: the trip's own, or the next stop's
+    /// arrival's or departure's where the trip carries none.
+    pub delay: Option<f64>,
+    /// The stop id of the next stop, the first stop time update's.
+    pub next_stop: Option<String>,
+}
+
+/// The trip updates feed from its JSON, with or without AT's envelope round it.
+pub fn parse_updates(json: &str) -> Result<TripUpdates, String> {
+    let raw: RawUpdates = serde_json::from_value(unwrap_envelope(json)?)
+        .map_err(|error| format!("the trip updates are not the shape expected: {error}"))?;
+
+    let updates = raw
+        .entity
+        .into_iter()
+        .filter(|entity| !entity.is_deleted)
+        .filter_map(|entity| {
+            let update = entity.trip_update?;
+            let trip = update.trip.unwrap_or_default();
+            let next = update.stop_time_update.and_then(OneOrMany::first);
+            let event_delay =
+                |event: &Option<RawEvent>| event.as_ref().and_then(|event| event.delay);
+            let delay = update.delay.or_else(|| {
+                let next = next.as_ref()?;
+                event_delay(&next.arrival).or_else(|| event_delay(&next.departure))
+            });
+            let id = update.vehicle.map_or_else(String::new, |descriptor| {
+                unit_name(
+                    descriptor.label.as_deref(),
+                    descriptor.id.as_deref().unwrap_or(""),
+                )
+            });
+
+            Some(TripUpdate {
+                trip_id: trip.trip_id,
+                id,
+                delay,
+                next_stop: next.and_then(|stop| stop.stop_id),
+            })
+        })
+        .collect();
+
+    Ok(TripUpdates {
+        header_at: raw.header.timestamp,
+        updates,
     })
 }
 
@@ -168,8 +258,9 @@ struct RawVehiclePosition {
     vehicle: Option<RawDescriptor>,
 }
 
-#[derive(Deserialize)]
+#[derive(Deserialize, Default)]
 struct RawTrip {
+    trip_id: Option<String>,
     route_id: Option<String>,
 }
 
@@ -187,6 +278,60 @@ struct RawPosition {
 struct RawDescriptor {
     id: Option<String>,
     label: Option<String>,
+}
+
+#[derive(Deserialize)]
+struct RawUpdates {
+    header: RawHeader,
+    #[serde(default)]
+    entity: Vec<RawUpdateEntity>,
+}
+
+#[derive(Deserialize)]
+struct RawUpdateEntity {
+    #[serde(default)]
+    is_deleted: bool,
+    trip_update: Option<RawTripUpdate>,
+}
+
+#[derive(Deserialize)]
+struct RawTripUpdate {
+    trip: Option<RawTrip>,
+    vehicle: Option<RawDescriptor>,
+    #[serde(default, deserialize_with = "optional_number_or_string")]
+    delay: Option<f64>,
+    #[serde(default)]
+    stop_time_update: Option<OneOrMany<RawStopTimeUpdate>>,
+}
+
+#[derive(Deserialize)]
+struct RawStopTimeUpdate {
+    stop_id: Option<String>,
+    arrival: Option<RawEvent>,
+    departure: Option<RawEvent>,
+}
+
+#[derive(Deserialize)]
+struct RawEvent {
+    #[serde(default, deserialize_with = "optional_number_or_string")]
+    delay: Option<f64>,
+}
+
+/// A field the feed writes as one object where the specification has a list of them.
+#[derive(Deserialize)]
+#[serde(untagged)]
+enum OneOrMany<T> {
+    One(T),
+    Many(Vec<T>),
+}
+
+impl<T> OneOrMany<T> {
+    fn first(self) -> Option<T> {
+        match self {
+            Self::One(one) => Some(one),
+            Self::Many(many) => many.into_iter().next(),
+        }
+    }
 }
 
 /// A number the feed may write as a number or as a string, see the module doc.

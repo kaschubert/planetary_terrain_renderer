@@ -1,6 +1,7 @@
 //! The table of the trains in the bottom left corner: one row per train with where it is
-//! along its line, which way it is running and how fast, and a camera icon that puts the
-//! chase camera behind it.
+//! along its line, which way it is running and how fast, its next stop and how late it
+//! runs where the live feed has said, and a camera icon that puts the chase camera behind
+//! it.
 //!
 //! The table is built in the style of the F2 provenance table, a grid of text cells under a
 //! row of headings with a rule beneath them, and shows exactly while the carriages do, see
@@ -51,7 +52,7 @@ const MARGIN: f32 = 6.0;
 
 /// The column headings, in order. The last is the camera icon's, which needs no word: the
 /// icon says what it is, and the README says what it does.
-const HEADINGS: [&str; 6] = ["line", "unit", "km", "dir", "km/h", ""];
+const HEADINGS: [&str; 8] = ["line", "unit", "km", "dir", "km/h", "next", "late", ""];
 
 /// The headings' colour, and the caption's: the provenance table's heading blue.
 const HEADING_COLOUR: Color = Color::srgb(0.65, 0.8, 1.0);
@@ -116,16 +117,20 @@ pub enum Column {
     Km,
     Dir,
     Speed,
+    Next,
+    Late,
 }
 
 impl Column {
     /// Every text column, in the order of HEADINGS.
-    pub const ALL: [Column; 5] = [
+    pub const ALL: [Column; 7] = [
         Column::Line,
         Column::Unit,
         Column::Km,
         Column::Dir,
         Column::Speed,
+        Column::Next,
+        Column::Late,
     ];
 }
 
@@ -146,8 +151,20 @@ pub fn speed_text(speed: f64) -> String {
     format!("{:.0}", speed * 3.6)
 }
 
+/// How late a train runs, from its delay in seconds: within a minute either way is on time,
+/// as a timetable counts, and beyond that whole minutes late with a plus, or early with a
+/// minus. Nothing where the feed has not said, which is every stand-in.
+pub fn late_text(delay: Option<f64>) -> String {
+    match delay {
+        None => String::new(),
+        Some(seconds) if seconds.abs() < 60.0 => "on time".to_string(),
+        Some(seconds) => format!("{:+.0} min", (seconds / 60.0).trunc()),
+    }
+}
+
 /// A text cell's string: the line's name folded to the font as the editor's panel folds it,
-/// the train's id folded the same way, since it comes from the feed, and its numbers.
+/// the train's id and its next stop folded the same way, since they come from the feed, and
+/// its numbers.
 pub fn cell_text(column: Column, name: &str, train: &Train) -> String {
     match column {
         Column::Line => ascii(name),
@@ -155,6 +172,8 @@ pub fn cell_text(column: Column, name: &str, train: &Train) -> String {
         Column::Km => km_text(train.distance),
         Column::Dir => dir_text(train.direction).to_string(),
         Column::Speed => speed_text(train.speed),
+        Column::Next => ascii(train.next_stop.as_deref().unwrap_or("")),
+        Column::Late => late_text(train.delay),
     }
 }
 

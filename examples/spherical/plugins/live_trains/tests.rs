@@ -24,7 +24,47 @@ fn fix(distance: f64, direction: f64, speed: f64) -> Fix {
         at: 1000.0,
         header_at: 1010.0,
         received: 5.0,
+        next_stop: None,
+        delay: None,
     }
+}
+
+/// Three trip updates as the feed wrote them on 7 October 2026, trimmed: a train with its
+/// one stop time update as an object and a delay of its own, a bus with a list of them and
+/// no delay but the next stop's, and an entity marked deleted.
+const UPDATES: &str = r#"{"status":"OK","response":{"header":{"timestamp":1791362715.124,"gtfs_realtime_version":"1.0","incrementality":0},"entity":[
+{"id":"258-880002-76980-2-W191500-649367d3","trip_update":{"trip":{"trip_id":"258-880002-76980-2-W191500-649367d3","start_time":"21:23:00","start_date":"20261007","schedule_relationship":0,"route_id":"E-W-201","direction_id":1},"stop_time_update":{"stop_sequence":8,"departure":{"delay":-7,"time":1791362573,"uncertainty":0},"stop_id":"9314-15d82116","schedule_relationship":0},"vehicle":{"id":"59430","label":"AMP        430","license_plate":""},"timestamp":1791362573,"delay":-1},"is_deleted":false},
+{"id":"bus","trip_update":{"trip":{"trip_id":"bus-trip","route_id":"393-203"},"stop_time_update":[{"stop_sequence":2,"arrival":{"delay":130,"time":1791362600},"stop_id":"2930-32beddd1"},{"stop_sequence":3,"stop_id":"later"}],"vehicle":{"id":"512000041","label":""},"timestamp":1791362570},"is_deleted":false},
+{"id":"gone","trip_update":{"trip":{"trip_id":"gone"}},"is_deleted":true}
+]}}"#;
+
+#[test]
+fn the_trip_updates_parse_with_the_next_stop_from_an_object_or_a_list() {
+    let updates = feed::parse_updates(UPDATES).unwrap();
+    assert_eq!(updates.header_at, 1791362715.124);
+    assert_eq!(updates.updates.len(), 2);
+
+    let train = &updates.updates[0];
+    assert_eq!(
+        train.trip_id.as_deref(),
+        Some("258-880002-76980-2-W191500-649367d3")
+    );
+    assert_eq!(train.id, "AMP 430");
+    assert_eq!(train.delay, Some(-1.0));
+    assert_eq!(train.next_stop.as_deref(), Some("9314-15d82116"));
+
+    // No delay of its own: the next stop's arrival's stands in. The list's first is next.
+    let bus = &updates.updates[1];
+    assert_eq!(bus.trip_id.as_deref(), Some("bus-trip"));
+    assert_eq!(bus.id, "512000041");
+    assert_eq!(bus.delay, Some(130.0));
+    assert_eq!(bus.next_stop.as_deref(), Some("2930-32beddd1"));
+
+    assert!(
+        feed::parse_updates(r#"{"status":"OK"}"#)
+            .unwrap_err()
+            .contains("trip updates")
+    );
 }
 
 #[test]
@@ -35,6 +75,7 @@ fn the_feed_parses_out_of_its_envelope_with_the_deleted_left_out() {
 
     let bus = &feed.vehicles[0];
     assert_eq!(bus.id, "512000041");
+    assert_eq!(bus.trip_id, None);
     assert_eq!(bus.route_id, None);
     assert_eq!(bus.bearing, Some(315.9));
     assert!((bus.speed - 1.6976652).abs() < 1e-9);
@@ -42,6 +83,10 @@ fn the_feed_parses_out_of_its_envelope_with_the_deleted_left_out() {
 
     let train = &feed.vehicles[1];
     assert_eq!(train.id, "AMP 1142");
+    assert_eq!(
+        train.trip_id.as_deref(),
+        Some("259-860001-76020-2-H136401-0d11f95d")
+    );
     assert_eq!(train.route_id.as_deref(), Some("O-W-201"));
     assert_eq!(train.latitude, -36.9091527777778);
     assert_eq!(train.longitude, 174.684855555556);

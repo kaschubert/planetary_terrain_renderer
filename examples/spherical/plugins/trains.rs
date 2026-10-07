@@ -210,6 +210,11 @@ pub struct Train {
     /// Metres per second, for the table: TRAIN_SPEED for a stand-in, or the speed the feed
     /// reported, which is nought for a train standing at a platform.
     pub speed: f64,
+    /// The station the train calls at next, by its short name, where the trip updates have
+    /// said; None for a stand-in and for a train the feed has no update for.
+    pub next_stop: Option<String>,
+    /// Seconds behind the timetable, positive late, where the trip updates have said.
+    pub delay: Option<f64>,
     /// The carriage, once spawned: a spatial entity under the big_space root, whose cell and
     /// transform the placer writes. None until spawn_carriages has run, and for good where
     /// there is no camera to find the root by or no asset server, as in the headless test.
@@ -227,6 +232,8 @@ impl Train {
             distance: 0.0,
             direction: 1.0,
             speed: TRAIN_SPEED,
+            next_stop: None,
+            delay: None,
             entity: None,
             label: None,
         }

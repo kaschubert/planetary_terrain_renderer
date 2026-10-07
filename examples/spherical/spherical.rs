@@ -14,6 +14,7 @@ use plugins::live_trains::LiveTrainsPlugin;
 use plugins::provenance::ProvenancePlugin;
 use plugins::rail_editor::RailEditorPlugin;
 use plugins::sheet_grid::SheetGridPlugin;
+use plugins::stations::StationsPlugin;
 use plugins::track_frames::TrackFramesPlugin;
 use plugins::trains::TrainsPlugin;
 use plugins::vram_usage::VramUsagePlugin;
@@ -137,16 +138,21 @@ fn main() {
             TerrainMaterialPlugin::<CustomMaterial>::default(),
             TerrainDebugPlugin,          // enable debug settings and controls
             FpsOverlayPlugin::default(), // frame rate and frame time graph, top left
-            VramUsagePlugin,             // gpu allocator usage, below the fps overlay
-            ProvenancePlugin,            // where each terrain's pixels came from, top right
-            SheetGridPlugin,             // the Topo50 sheets over the terrain, coloured by coverage
-            AucklandRailPlugin,          // the rail lines over Auckland, in AT's colours
-            RailEditorPlugin,            // selecting, adding and removing the lines' points, on F5
-            TrackFramesPlugin,           // the track frames the models stand on, every 25 m, on F6
-            TrainsPlugin,                // one carriage per line, driving along the track, on F7
-            // The carriages where Auckland Transport's feed puts the trains, on F8, with the
-            // key from AT_API_KEY; tests.rs adds it without one, so it never fetches.
-            LiveTrainsPlugin::from_env(),
+            // The example's own plugins, as a tuple of their own: add_plugins takes fifteen
+            // plugins at most, and with these there are more.
+            (
+                VramUsagePlugin,    // gpu allocator usage, below the fps overlay
+                ProvenancePlugin,   // where each terrain's pixels came from, top right
+                SheetGridPlugin,    // the Topo50 sheets over the terrain, coloured by coverage
+                AucklandRailPlugin, // the rail lines over Auckland, in AT's colours
+                RailEditorPlugin,   // selecting, adding and removing the lines' points, on F5
+                TrackFramesPlugin,  // the track frames the models stand on, every 25 m, on F6
+                StationsPlugin,     // the station names over the lines, on F9
+                TrainsPlugin,       // one carriage per line, driving along the track, on F7
+                // The carriages where Auckland Transport's feed puts the trains, on F8, with
+                // the key from AT_API_KEY; tests.rs adds it without one, so it never fetches.
+                LiveTrainsPlugin::from_env(),
+            ),
             TerrainPickingPlugin,
             // The move gizmo's arrows, see rail_editor/move_gizmo.rs. Added here and not by
             // RailEditorPlugin so that tests.rs can run the editor without a renderer, which

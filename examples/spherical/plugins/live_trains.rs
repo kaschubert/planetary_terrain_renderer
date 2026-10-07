@@ -2,6 +2,11 @@
 //! the stand-ins, on F8: one per train on a trip, fetched every POLL_SECONDS and run on
 //! between fetches at the speed each reported, as the live maps on the web do in 2D.
 //!
+//! The trip updates feed, fetched with every UPDATES_EVERY polls since it changes by the
+//! minute, gives each trip how late it runs and the stop it calls at next, which the table
+//! shows as the station's name through the stations file, see stations.rs. The two feeds
+//! are joined by trip id, or by unit where a position names no trip.
+//!
 //! The feed gives every vehicle of every mode a latitude and longitude. A train's is told
 //! by its trip's route, whose id is its line's name with a version on the end, and the
 //! position is dropped onto that line's spline to get the one thing the placer in trains.rs
@@ -37,6 +42,8 @@
 
 use super::auckland_rail::AucklandRail;
 use super::rail_editor::frame::{Frame, unit_under};
+use super::shared::stations::Stations;
+use super::stations::RailStations;
 use super::track_frames::{TrackSpline, TrackSplines, refresh_track_splines};
 use super::trains::{Train, Trains, drive_trains};
 use bevy::{
@@ -45,7 +52,7 @@ use bevy::{
     tasks::{IoTaskPool, Task, block_on, poll_once},
 };
 use bevy_terrain::{math::unit_position, prelude::TerrainShape};
-use feed::Feed;
+use feed::{Feed, TripUpdate, TripUpdates};
 use std::collections::HashMap;
 
 mod feed;
@@ -56,10 +63,16 @@ pub const KEY_VARIABLE: &str = "AT_API_KEY";
 /// Seconds between fetches. The feed gives each train a new fix about every ten seconds,
 /// measured on 7 October 2026 over a morning peak, and a fix is some nine seconds old by
 /// the time it is fetched, so fetching slower only ages what is drawn. The key allows 600
-/// calls a minute and 35,000 a week: one every 10 s is 6 a minute, and 35,000 of them is
-/// some 97 hours of running a week, which an evening's run is nowhere near; left running
-/// round the clock the week's calls would run out on the fifth day.
+/// calls a minute and 35,000 a week: one every 10 s, with the trip updates every
+/// UPDATES_EVERY of them, is 8 a minute, and 35,000 of them is some 73 hours of running a
+/// week, which an evening's run is nowhere near; left running round the clock the week's
+/// calls would run out on the fourth day.
 pub const POLL_SECONDS: f32 = 10.0;
+
+/// Fetch the trip updates with every so many polls of the positions: how late a train runs
+/// and where it calls next change by the minute, not by the second, and the fetch is a
+/// call against the week's quota like any other.
+pub const UPDATES_EVERY: u64 = 3;
 
 /// How far a reported position may stand from its line, level, and still be a train on it,
 /// in metres. A GPS fix is metres out, tens under the city's buildings; a unit at the depot
@@ -156,9 +169,17 @@ pub struct LiveTrains {
     /// the feed is switched on, so the first fetch is at once.
     due: bool,
     /// The fetch in flight, until it lands.
-    task: Option<Task<Result<Feed, String>>>,
+    task: Option<Task<Fetched>>,
     /// The latest fix of every train the last fetch reported, by the train's id.
     fixes: HashMap<String, Fix>,
+    /// The trip updates the last fetch of them brought, kept between fetches, since they
+    /// come with every UPDATES_EVERY polls.
+    updates: Vec<TripUpdate>,
+    /// The last error fetching them, so each is logged once.
+    updates_error: Option<String>,
+    /// Fetches started since the feed was switched on, which says when the trip updates
+    /// are fetched too.
+    polls: u64,
     status: FeedStatus,
 }
 
@@ -196,6 +217,17 @@ pub struct Fix {
     pub header_at: f64,
     /// Time::elapsed when the fetch landed.
     pub received: f64,
+    /// The station the trip calls at next, by its short name, from the trip updates.
+    pub next_stop: Option<String>,
+    /// Seconds behind the timetable, positive late, from the trip updates.
+    pub delay: Option<f64>,
+}
+
+/// What one poll brings back: the positions, and with every UPDATES_EVERY polls the trip
+/// updates too, each with its own error, so the one that lands is not held up by the other.
+struct Fetched {
+    feed: Result<Feed, String>,
+    updates: Option<Result<TripUpdates, String>>,
 }
 
 impl LiveTrains {
@@ -207,6 +239,9 @@ impl LiveTrains {
             due: false,
             task: None,
             fixes: HashMap::new(),
+            updates: Vec::new(),
+            updates_error: None,
+            polls: 0,
             status: FeedStatus::NoKey,
         }
     }
@@ -218,6 +253,8 @@ impl LiveTrains {
         trains.live = true;
         trains.clear(commands);
         self.fixes.clear();
+        self.updates.clear();
+        self.polls = 0;
         self.poll.reset();
         self.due = true;
         self.status = FeedStatus::Fetching;
@@ -230,6 +267,8 @@ impl LiveTrains {
         trains.live = false;
         trains.reset_stand_ins(rail, commands);
         self.fixes.clear();
+        self.updates.clear();
+        self.polls = 0;
         self.task = None;
         self.due = false;
         self.status = FeedStatus::Off;
@@ -237,17 +276,32 @@ impl LiveTrains {
 
     /// Takes a fetch that landed: every train on a line, placed on it, and the roster made
     /// to match, see the module doc.
+    #[allow(clippy::too_many_arguments)]
     fn apply(
         &mut self,
         feed: &Feed,
         now: f64,
         rail: &AucklandRail,
         splines: &TrackSplines,
+        stations: Option<&Stations>,
         trains: &mut Trains,
         commands: &mut Commands,
     ) {
         let mut fixes: HashMap<String, Fix> = HashMap::with_capacity(self.fixes.len());
         let mut off_line = 0;
+
+        // The trip updates by trip, and by unit for a position that names no trip.
+        let by_trip: HashMap<&str, &TripUpdate> = self
+            .updates
+            .iter()
+            .filter_map(|update| Some((update.trip_id.as_deref()?, update)))
+            .collect();
+        let by_unit: HashMap<&str, &TripUpdate> = self
+            .updates
+            .iter()
+            .filter(|update| !update.id.is_empty())
+            .map(|update| (update.id.as_str(), update))
+            .collect();
 
         for vehicle in &feed.vehicles {
             let Some(route_id) = vehicle.route_id.as_deref() else {
@@ -284,6 +338,20 @@ impl LiveTrains {
                 vehicle.speed,
                 heading_along(spline, distance),
             );
+            let update = vehicle
+                .trip_id
+                .as_deref()
+                .and_then(|trip| by_trip.get(trip))
+                .or_else(|| by_unit.get(vehicle.id.as_str()))
+                .copied();
+            let next_stop = update
+                .and_then(|update| update.next_stop.as_deref())
+                .map(|stop| {
+                    stations
+                        .and_then(|stations| stations.name_of(stop))
+                        .unwrap_or(stop)
+                        .to_string()
+                });
             fixes.insert(
                 vehicle.id.clone(),
                 Fix {
@@ -294,6 +362,8 @@ impl LiveTrains {
                     at: vehicle.at,
                     header_at: feed.header_at,
                     received: now,
+                    next_stop,
+                    delay: update.and_then(|update| update.delay),
                 },
             );
         }
@@ -321,6 +391,8 @@ impl LiveTrains {
                 distance: fix.distance,
                 direction: fix.direction,
                 speed: fix.speed,
+                next_stop: fix.next_stop.clone(),
+                delay: fix.delay,
                 entity: None,
                 label: None,
             });
@@ -516,6 +588,7 @@ fn poll_feed(
     mut commands: Commands,
     rail: Res<AucklandRail>,
     splines: Res<TrackSplines>,
+    stations: Option<Res<RailStations>>,
     mut live: ResMut<LiveTrains>,
     mut trains: ResMut<Trains>,
 ) {
@@ -531,16 +604,32 @@ fn poll_feed(
     }
 
     if let Some(task) = live.task.as_mut() {
-        let Some(result) = block_on(poll_once(task)) else {
+        let Some(fetched) = block_on(poll_once(task)) else {
             return;
         };
         live.task = None;
-        match result {
+        match fetched.updates {
+            Some(Ok(updates)) => {
+                live.updates = updates.updates;
+                live.updates_error = None;
+            }
+            Some(Err(error)) => {
+                if live.updates_error.as_ref() != Some(&error) {
+                    warn!(
+                        "live trains: the trip updates did not arrive, the last are kept: {error}"
+                    );
+                }
+                live.updates_error = Some(error);
+            }
+            None => {}
+        }
+        match fetched.feed {
             Ok(feed) => live.apply(
                 &feed,
                 time.elapsed_secs_f64(),
                 &rail,
                 &splines,
+                stations.as_deref().map(|stations| &stations.stations),
                 &mut trains,
                 &mut commands,
             ),
@@ -555,7 +644,13 @@ fn poll_feed(
 
     if live.task.is_none() && live.due {
         live.due = false;
-        live.task = Some(IoTaskPool::get().spawn(async move { feed::fetch(&key) }));
+        let with_updates = live.polls.is_multiple_of(UPDATES_EVERY);
+        live.polls += 1;
+        live.task = Some(IoTaskPool::get().spawn(async move {
+            let feed = feed::fetch(&key);
+            let updates = with_updates.then(|| feed::fetch_updates(&key));
+            Fetched { feed, updates }
+        }));
     }
 }
 
@@ -585,6 +680,10 @@ fn steer_trains(
         train.distance = approach(train.distance, target, fix.direction, dt);
         train.direction = fix.direction;
         train.speed = fix.speed;
+        train.delay = fix.delay;
+        if train.next_stop != fix.next_stop {
+            train.next_stop.clone_from(&fix.next_stop);
+        }
     }
 }
 

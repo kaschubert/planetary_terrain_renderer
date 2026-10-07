@@ -2,3 +2,4 @@
 //! loads and draws, the editor edits, the track frames read and the trains name.
 
 pub mod rail_network;
+pub mod stations;
