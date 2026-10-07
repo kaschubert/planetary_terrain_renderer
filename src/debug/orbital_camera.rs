@@ -12,7 +12,7 @@ use bevy::{
 };
 use big_space::prelude::*;
 
-/// Radians of orbit per pixel of a middle-button drag: about three tenths of a degree, so a
+/// Radians of orbit per pixel of a right-button drag: about three tenths of a degree, so a
 /// drag across a third of a 1920 px window goes half way round the point under the cursor.
 const ROTATION_PER_PIXEL: f64 = 0.005;
 
@@ -181,7 +181,7 @@ pub fn orbital_camera_controller(
         controller.pan_data = None;
     }
 
-    if mouse_buttons.pressed(MouseButton::Middle) {
+    if mouse_buttons.pressed(MouseButton::Right) {
         if controller.rotation_data.is_none()
             && cursor_position.is_some()
             && !capture.blocks_pointer()
@@ -218,7 +218,7 @@ pub fn orbital_camera_controller(
         controller.rotation_data = None;
     }
 
-    // The wheel zooms as the right button does, towards the point under the cursor. It is
+    // The wheel zooms as the middle button does, towards the point under the cursor. It is
     // read every frame, so notches do not pile up while something else has the wheel.
     let notches: f64 = wheel
         .read()
@@ -228,7 +228,7 @@ pub fn orbital_camera_controller(
             MouseScrollUnit::Pixel => scroll.y as f64 / 20.0,
         })
         .sum();
-    let dragging_zoom = mouse_buttons.pressed(MouseButton::Right);
+    let dragging_zoom = mouse_buttons.pressed(MouseButton::Middle);
     let wheeling = controller.wheel_zooms && notches != 0.0 && !capture.blocks_pointer();
 
     if dragging_zoom || wheeling {
@@ -259,7 +259,7 @@ pub fn orbital_camera_controller(
             data.target_zoom -= notches * ZOOM_PER_NOTCH;
             data.zoom = data.zoom.lerp(data.target_zoom, smoothing);
         }
-    } else if mouse_buttons.pressed(MouseButton::Left) || mouse_buttons.pressed(MouseButton::Middle)
+    } else if mouse_buttons.pressed(MouseButton::Left) || mouse_buttons.pressed(MouseButton::Right)
     {
         // A pan or a rotate starting takes over from a wheel zoom still easing in.
         controller.zoom_data = None;

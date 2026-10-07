@@ -7,7 +7,7 @@
 //! behind and above it along the frame's own axes, and looks at a point a little past it,
 //! so the carriage sits in the lower half of the view and the line beyond is what the
 //! viewer watches. A drag turns the orbit round the carriage's up and tilts it, the wheel
-//! or a drag with the right button draws it in or out, see Orbit. The heading the orbit is
+//! or a drag with the middle button draws it in or out, see Orbit. The heading the orbit is
 //! built on is smoothed towards the frame's with an exponential lag, so that the swing round
 //! when a train reverses at the end of its line carries the eye round the carriage over
 //! about a second rather than a frame; the position is not smoothed, see chase_heading, so
@@ -79,7 +79,7 @@ pub const PITCH_DEGREES: (f64, f64) = (5.0, 85.0);
 /// fits the view; at 3 km it is a dot and the orbital camera is the tool from there.
 pub const DISTANCE_METRES: (f64, f64) = (20.0, 3000.0);
 
-/// What a pixel of drag with the right button, and a notch of the wheel, do to the distance,
+/// What a pixel of drag with the middle button, and a notch of the wheel, do to the distance,
 /// as exponents of e: 140 px of drag or five notches double it or halve it, a touch finer
 /// than the orbital camera's zoom so the carriage can be framed.
 pub const ZOOM_PER_PIXEL: f64 = 0.005;
@@ -448,7 +448,7 @@ fn follow_train(
         _ => {}
     }
     match chase.dragging {
-        Some(MouseButton::Right) => chase.orbit.zoom(motion.delta.y as f64 * ZOOM_PER_PIXEL),
+        Some(MouseButton::Middle) => chase.orbit.zoom(motion.delta.y as f64 * ZOOM_PER_PIXEL),
         Some(_) => chase.orbit.turn(motion.delta),
         None => {}
     }

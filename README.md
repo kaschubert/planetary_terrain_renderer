@@ -75,8 +75,8 @@ using only the mouse.
 
 - `R` - toggle orbital camera movement
 - Hold the left mouse button to pan the camera
-- Hold the middle mouse button to rotate the camera: it goes the way you drag, right round to the right of the point under the cursor and up to look down on it
-- Hold the right mouse button and drag down to zoom out or up to zoom in, or turn the mouse wheel; both zoom towards the point under the cursor
+- Hold the right mouse button to rotate the camera: it goes the way you drag, right round to the right of the point under the cursor and up to look down on it
+- Hold the middle mouse button and drag down to zoom out or up to zoom in, or turn the mouse wheel; both zoom towards the point under the cursor
 
 ### Visualization Toggles
 
@@ -131,8 +131,8 @@ One carriage per line drives itself along the drawn track, end to end and back a
 - `F7` - toggle the trains, and the table of them
 - `F8` - toggle the live feed: on, one carriage per train Auckland Transport reports, where it reports it; off, the stand-ins; nothing without `AT_API_KEY`
 - Camera icon in the trains table - follow that train with a chase camera, from behind, or at the zoom you had when switching from another train; click it again, press `Escape`, `T`, `R` or a fly key, or hide the trains to let go
-- Drag with the left or middle button while following - orbit the camera round the train, right to go round its right and up to look down on it
-- Mouse wheel, or drag with the right button, while following - zoom in and out, between 20 m and 3 km
+- Drag with the left or right button while following - orbit the camera round the train, right to go round its right and up to look down on it
+- Mouse wheel, or drag with the middle button, while following - zoom in and out, between 20 m and 3 km
 
 ### Quality Adjustments
 
