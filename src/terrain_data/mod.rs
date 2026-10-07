@@ -18,6 +18,7 @@
 mod attachment;
 mod gpu_attachment;
 mod gpu_tile_atlas;
+mod height_sampler;
 mod tile_atlas;
 mod tile_loader;
 mod tile_tree;
@@ -25,6 +26,7 @@ mod tile_tree;
 pub use self::{
     attachment::{AttachmentConfig, AttachmentFormat, AttachmentLabel},
     gpu_tile_atlas::GpuTileAtlas,
+    height_sampler::TerrainHeightSampler,
     tile_atlas::TileAtlas,
     tile_tree::TileTree,
 };

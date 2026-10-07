@@ -2,12 +2,30 @@ use crate::debug::PointerCapture;
 use crate::picking::PickingData;
 use bevy::{
     color::palettes::basic,
-    input::{ButtonInput, mouse::AccumulatedMouseMotion},
+    input::{
+        ButtonInput,
+        mouse::{AccumulatedMouseMotion, MouseScrollUnit, MouseWheel},
+    },
     math::{DQuat, DVec2, DVec3, Mat4, Vec2},
     prelude::*,
     window::{CursorGrabMode, CursorOptions, PrimaryWindow},
 };
 use big_space::prelude::*;
+
+/// Radians of orbit per pixel of a right-button drag: about three tenths of a degree, so a
+/// drag across a third of a 1920 px window goes half way round the point under the cursor.
+const ROTATION_PER_PIXEL: f64 = 0.005;
+
+/// What a pixel of right-button drag and a notch of the wheel do to the distance, in
+/// doublings: a 140 px drag or five notches double it or halve it, the feel the spherical
+/// example's chase camera was tuned to by hand.
+const ZOOM_PER_PIXEL: f64 = 0.0072;
+const ZOOM_PER_NOTCH: f64 = 0.2;
+
+/// A wheel zoom is over once the eased distance is within this many doublings of its
+/// target: well under a percent, which is under a metre at any distance the wheel is used
+/// from.
+const ZOOM_SETTLED: f64 = 0.001;
 
 fn ray_sphere_intersection(
     ray_origin: DVec3,
@@ -58,7 +76,12 @@ pub struct RotationData {
 #[derive(Clone, Debug, Component)]
 #[require(PickingData, Camera3d, FloatingOrigin = FloatingOrigin)]
 pub struct OrbitalCameraController {
-    enabled: bool,
+    /// Whether the controller moves the camera. R toggles it; the spherical example's chase
+    /// camera turns it off while it has the view, and on again when it lets go.
+    pub enabled: bool,
+    /// Whether the mouse wheel zooms. The spherical example's sheet grid takes the wheel for
+    /// its height while its box is ticked, and turns this off meanwhile.
+    pub wheel_zooms: bool,
     cursor_coords: Vec2,
     anchor_position: DVec3,
     anchor_cell: CellCoord,
@@ -74,6 +97,7 @@ impl Default for OrbitalCameraController {
     fn default() -> Self {
         Self {
             enabled: true,
+            wheel_zooms: true,
             zoom_data: None,
             pan_data: None,
             rotation_data: None,
@@ -95,6 +119,7 @@ pub fn orbital_camera_controller(
     keyboard: Res<ButtonInput<KeyCode>>,
     mouse_buttons: Res<ButtonInput<MouseButton>>,
     mouse_move: Res<AccumulatedMouseMotion>,
+    mut wheel: MessageReader<MouseWheel>,
     capture: Res<PointerCapture>,
     mut camera: Query<(
         Entity,
@@ -156,7 +181,7 @@ pub fn orbital_camera_controller(
         controller.pan_data = None;
     }
 
-    if mouse_buttons.pressed(MouseButton::Middle) {
+    if mouse_buttons.pressed(MouseButton::Right) {
         if controller.rotation_data.is_none()
             && cursor_position.is_some()
             && !capture.blocks_pointer()
@@ -175,11 +200,13 @@ pub fn orbital_camera_controller(
             update_cursor_coords = false;
         }
 
-        let rotation_speed = 0.005;
-
         if let Some(data) = controller.rotation_data.as_mut() {
+            // The camera goes the way the mouse drags: right takes it round to the right of
+            // the anchor and up lifts it to look down more, as the spherical example's chase
+            // camera moves. The clamp keeps the tilt between straight above the anchor and
+            // the ground whichever way the mouse maps to it.
             // Todo: fix tilt clamping
-            data.target_rotation -= mouse_move.delta.as_dvec2() * rotation_speed;
+            data.target_rotation += mouse_move.delta.as_dvec2() * ROTATION_PER_PIXEL;
             data.target_rotation.y = data.target_rotation.y.clamp(
                 -data.initial_tilt,
                 std::f64::consts::FRAC_PI_2 - data.initial_tilt,
@@ -191,7 +218,20 @@ pub fn orbital_camera_controller(
         controller.rotation_data = None;
     }
 
-    if mouse_buttons.pressed(MouseButton::Right) {
+    // The wheel zooms as the middle button does, towards the point under the cursor. It is
+    // read every frame, so notches do not pile up while something else has the wheel.
+    let notches: f64 = wheel
+        .read()
+        .map(|scroll| match scroll.unit {
+            MouseScrollUnit::Line => scroll.y as f64,
+            // A touchpad reports pixels; a line is about twenty of them.
+            MouseScrollUnit::Pixel => scroll.y as f64 / 20.0,
+        })
+        .sum();
+    let dragging_zoom = mouse_buttons.pressed(MouseButton::Middle);
+    let wheeling = controller.wheel_zooms && notches != 0.0 && !capture.blocks_pointer();
+
+    if dragging_zoom || wheeling {
         if controller.zoom_data.is_none() && cursor_position.is_some() && !capture.blocks_pointer()
         {
             controller.anchor_position = cursor_position.unwrap();
@@ -205,21 +245,35 @@ pub fn orbital_camera_controller(
                 target_zoom: zoom,
                 zoom,
             });
-        } else {
+        } else if dragging_zoom {
             update_cursor_coords = false;
         }
 
-        let zoom_speed = 0.01;
-
         if let Some(data) = controller.zoom_data.as_mut() {
-            data.target_zoom -= mouse_move.delta.element_sum() as f64 * zoom_speed;
+            // Dragging down draws the camera out and up brings it in, and a notch of the
+            // wheel up brings it in, in doublings of the distance so a step feels the same
+            // near and far.
+            if dragging_zoom {
+                data.target_zoom += mouse_move.delta.y as f64 * ZOOM_PER_PIXEL;
+            }
+            data.target_zoom -= notches * ZOOM_PER_NOTCH;
             data.zoom = data.zoom.lerp(data.target_zoom, smoothing);
         }
+    } else if mouse_buttons.pressed(MouseButton::Left) || mouse_buttons.pressed(MouseButton::Right)
+    {
+        // A pan or a rotate starting takes over from a wheel zoom still easing in.
+        controller.zoom_data = None;
+    } else if let Some(data) = controller
+        .zoom_data
+        .as_mut()
+        .filter(|data| (data.zoom - data.target_zoom).abs() > ZOOM_SETTLED)
+    {
+        // A wheel zoom eases on to its target after the notch, as a drag's does while the
+        // button is held.
+        data.zoom = data.zoom.lerp(data.target_zoom, smoothing);
     } else {
         controller.zoom_data = None;
     }
-
-    // Todo: add support for scroll wheel zoom
 
     if update_cursor_coords {
         if cursor_options.grab_mode == CursorGrabMode::Locked {

@@ -10,7 +10,6 @@
 //! against the georeferencing of every whole sheet file on disk, 964 of them, and against
 //! PROJ at the corners.
 
-use super::unit_position;
 use bevy::ecs::relationship::RelatedSpawnerCommands;
 use bevy::{
     color::palettes::{basic, css},
@@ -24,7 +23,10 @@ use bevy::{
         TrackClick, ValueChange, observe,
     },
 };
-use bevy_terrain::{math::Coordinate, prelude::*};
+use bevy_terrain::{
+    math::{Coordinate, unit_position},
+    prelude::*,
+};
 use big_space::prelude::{CellCoord, Grids};
 use std::f64::consts::PI;
 
@@ -45,7 +47,7 @@ impl Plugin for SheetGridPlugin {
                 (
                     spawn_sheet_labels,
                     // Into the row the provenance panel leaves for it.
-                    spawn_height_controls.after(super::spawn_provenance_table),
+                    spawn_height_controls.after(super::provenance::spawn_provenance_table),
                 ),
             )
             .add_systems(
@@ -54,6 +56,7 @@ impl Plugin for SheetGridPlugin {
                     toggle_sheet_grid,
                     collect_sheets,
                     wheel_adjusts_height,
+                    yield_wheel,
                     (style_height_slider, sync_checkboxes, show_height),
                 ),
             )
@@ -238,10 +241,9 @@ const HEIGHT_RANGE: (f32, f32) = (0.0, 3000.0);
 /// Metres per notch of the wheel.
 const WHEEL_STEP: f32 = 25.0;
 
-/// The lines are drawn in front of the terrain, the way the labels already are. They float
-/// at one height, and terrain higher than that would otherwise hide them: a ridge between
-/// the camera and a cell took its outline while its label, being screen space, stayed.
-/// Cells on the far side of the planet are still dropped by the horizon test.
+/// The depth bias that draws a gizmo group in front of the terrain: the sheet grid here, and
+/// the rail lines, the editor's discs and the track frames, which take it from here so that a
+/// retune reaches them all.
 ///
 /// Not the full -1, though. The gizmo shader maps a line's depth to (z/w)^(1 + bias), and
 /// at -1 that is the near plane for every vertex: the whole grid on one depth, with depth
@@ -249,8 +251,14 @@ const WHEEL_STEP: f32 = 25.0;
 /// other, and at long range the rounding put vertices a hair past the plane and clipped
 /// them. At -0.9 the map is (z/w)^0.1, still ordered and still distinct across the grid,
 /// while anything short of geometry touching the lens is beaten.
+pub const IN_FRONT_OF_TERRAIN: f32 = -0.9;
+
+/// The lines are drawn in front of the terrain, the way the labels already are. They float
+/// at one height, and terrain higher than that would otherwise hide them: a ridge between
+/// the camera and a cell took its outline while its label, being screen space, stayed.
+/// Cells on the far side of the planet are still dropped by the horizon test.
 fn draw_grid_over_terrain(mut store: ResMut<GizmoConfigStore>) {
-    store.config_mut::<SheetGizmos>().0.depth_bias = -0.9;
+    store.config_mut::<SheetGizmos>().0.depth_bias = IN_FRONT_OF_TERRAIN;
 }
 
 fn toggle_sheet_grid(input: Res<ButtonInput<KeyCode>>, mut grid: ResMut<SheetGrid>) {
@@ -392,6 +400,31 @@ const LABEL_CHAR_WIDTH: f32 = 7.8;
 const LABEL_HEIGHT: f32 = 20.0;
 const LABEL_GAP: f32 = 6.0;
 
+/// The footprint of a label with this caption, in pixels: the characters at their width,
+/// the 4 px of padding either side, and the line's height. The trains' labels are set in
+/// the same font with the same padding and take their footprint from here, so a change of
+/// either reaches them too.
+pub fn label_size(caption: &str) -> Vec2 {
+    Vec2::new(LABEL_CHAR_WIDTH * caption.len() as f32 + 8.0, LABEL_HEIGHT)
+}
+
+/// What each line after the first adds to a label's height, in pixels: the font's default
+/// line height, 1.2 em of 13 px.
+const LABEL_LINE_HEIGHT: f32 = 15.6;
+
+/// The footprint of a label of several lines, in pixels: as wide as its widest line's, see
+/// label_size, and a line's height taller for each line after the first. The trains' labels
+/// are three lines.
+pub fn label_size_lines(lines: &[&str]) -> Vec2 {
+    let widest = lines
+        .iter()
+        .map(|line| label_size(line).x)
+        .fold(label_size("").x, f32::max);
+    let extra = lines.len().saturating_sub(1) as f32;
+
+    Vec2::new(widest, LABEL_HEIGHT + LABEL_LINE_HEIGHT * extra)
+}
+
 #[derive(Component)]
 struct SheetLabel;
 
@@ -523,7 +556,7 @@ fn draw_sheet_grid(
             Some(metres) => format!("{} {metres}m", sheet.name),
             None => sheet.name.clone(),
         };
-        let size = Vec2::new(LABEL_CHAR_WIDTH * caption.len() as f32 + 8.0, LABEL_HEIGHT);
+        let size = label_size(&caption);
 
         if cell.cmplt(size + 2.0 * LABEL_GAP).any() {
             continue;
@@ -820,6 +853,19 @@ fn sync_checkboxes(
 fn show_height(grid: Res<SheetGrid>, mut readout: Single<&mut Text, With<HeightReadout>>) {
     if grid.is_changed() {
         readout.0 = format!("{} m", grid.height as i32);
+    }
+}
+
+/// Hands the wheel to the grid's height while the box is ticked and back to the camera's
+/// zoom when it is not, since the orbital camera zooms on the wheel otherwise and the two
+/// acting at once would be a surprise. The grid resource changes rarely, so the camera is
+/// written only then.
+fn yield_wheel(grid: Res<SheetGrid>, mut cameras: Query<&mut OrbitalCameraController>) {
+    if !grid.is_changed() {
+        return;
+    }
+    for mut camera in &mut cameras {
+        camera.wheel_zooms = !grid.wheel_adjusts_height;
     }
 }
 

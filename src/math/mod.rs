@@ -1,4 +1,4 @@
-use bevy::math::{DMat3, DVec2, IVec2};
+use bevy::math::{DMat3, DVec2, DVec3, IVec2};
 use std::mem;
 
 mod coordinate;
@@ -11,6 +11,20 @@ pub use self::{
     surface_approximation::SurfaceApproximation,
     terrain_shape::TerrainShape,
 };
+
+/// Longitude and latitude in degrees to a direction on the unit sphere. The formula is the
+/// preprocessor's, CubeTransformer in preprocess/src/transformers.rs, which is what put the
+/// tiles where they are, so anything placed on the terrain by its coordinates goes through
+/// here: the height sampler, and the spherical example's lines, grid and terrain centres.
+pub fn unit_position(longitude: f64, latitude: f64) -> DVec3 {
+    let (longitude, latitude) = (longitude.to_radians(), latitude.to_radians());
+
+    DVec3::new(
+        -latitude.cos() * longitude.cos(),
+        latitude.sin(),
+        latitude.cos() * longitude.sin(),
+    )
+}
 
 /// The square of the parameter c of the algebraic sigmoid function, used to convert between uv and st coordinates.
 const SIGMA: f64 = 0.87 * 0.87;

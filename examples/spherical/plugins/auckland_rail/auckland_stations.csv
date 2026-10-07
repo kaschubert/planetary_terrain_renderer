@@ -1,0 +1,152 @@
+# Auckland's train stations and their platforms, from Auckland Transport's GTFS feed https://gtfs.at.govt.nz/gtfs.zip
+# Written by preprocess/download_auckland_rail.sh on 2026-10-07, feed version VDV_Merge_118_5_H_7_331.08584113514311661810347857525CU60
+# 45 stations, each followed by its platforms, 102 platforms in all.
+# A platform's parent is its station's stop_id; a station's is blank. The name is last so it may hold a comma.
+stop_id,parent,code,latitude,longitude,name
+105-474861ff,,105,-36.89714,174.69910,Avondale Train Station
+9312-e5a780ea,105-474861ff,9312,-36.89714,174.69910,Avondale Train Station 1
+9313-4b1bb1e7,105-474861ff,9313,-36.89714,174.69915,Avondale Train Station 2
+119-de6ec4e8,,119,-36.87767,174.72045,Baldwin Ave Train Station
+9308-490884bd,119-de6ec4e8,9308,-36.87767,174.72045,Baldwin Ave Train Station 1
+9309-e59de511,119-de6ec4e8,9309,-36.87770,174.72047,Baldwin Ave Train Station 2
+144-3d60114c,,144,-37.10500,174.95154,Drury Train Station
+9244-180daa8e,144-3d60114c,9244,-37.10500,174.95154,Drury Train Station 1
+9245-ac09290a,144-3d60114c,9245,-37.10503,174.95167,Drury Train Station 2
+112-15fd1147,,112,-36.89845,174.80821,Ellerslie Train Station
+9204-f48e513f,112-15fd1147,9204,-36.89845,174.80821,Ellerslie Train Station 1
+9205-388a750f,112-15fd1147,9205,-36.89845,174.80821,Ellerslie Train Station 2
+123-02f15431,,123,-36.91066,174.66706,Fruitvale Rd Train Station
+9316-2ac0d8cb,123-02f15431,9316,-36.91066,174.66706,Fruitvale Train Station 1
+9317-5128fb2f,123-02f15431,9317,-36.91068,174.66705,Fruitvale Train Station 2
+124-72ac2d54,,124,-36.91027,174.65317,Glen Eden Train Station
+9318-c8c09d1b,124-72ac2d54,9318,-36.91027,174.65317,Glen Eden Train Station 1
+9319-5cb53296,124-72ac2d54,9319,-36.91027,174.65317,Glen Eden Train Station 2
+103-be3d2b7e,,103,-36.87880,174.85412,Glen Innes Train Station
+9404-50cdc941,103-be3d2b7e,9404,-36.87880,174.85412,Glen Innes Train Station 1
+9405-8931d7d6,103-be3d2b7e,9405,-36.87880,174.85412,Glen Innes Train Station 2
+277-dfb27cf9,,277,-36.86561,174.76984,Grafton Train Station
+9300-9efd20bf,277-dfb27cf9,9300,-36.86561,174.76984,Grafton Train Station 2
+9301-113744ac,277-dfb27cf9,9301,-36.86563,174.76985,Grafton Train Station 1
+113-5a21d646,,113,-36.88965,174.79741,Greenlane Train Station
+9202-76db2801,113-5a21d646,9202,-36.88965,174.79741,Greenlane Train Station 1
+9203-7e1926ce,113-5a21d646,9203,-36.88962,174.79746,Greenlane Train Station 2
+125-0874efac,,125,-36.88096,174.63091,Henderson Train Station
+9322-6bc7f9b8,125-0874efac,9322,-36.88096,174.63091,Henderson Train Station 1
+9323-cc407567,125-0874efac,9323,-36.88064,174.63083,Henderson Train Station 3
+9330-af594dbe,125-0874efac,9330,-36.88193,174.63092,Henderson Train Station 2
+99-68379945,,99,-37.01346,174.87467,Homai Train Station
+9220-8e46eb03,99-68379945,9220,-37.01346,174.87467,Homai Train Station 1
+9221-1f071411,99-68379945,9221,-37.01346,174.87467,Homai Train Station 2
+132-c139f454,,132,-36.85816,174.75879,Karanga-a-Hape Train Station
+9295-a6a0f711,132-c139f454,9295,-36.85816,174.75879,Karanga-a-Hape Train Station 1
+9296-52e7c2b6,132-c139f454,9296,-36.85809,174.75923,Karanga-a-Hape Train Station 2
+122-34ecc043,,122,-36.87250,174.74453,Kingsland Train Station
+9304-dcb2ed75,122-34ecc043,9304,-36.87250,174.74453,Kingsland Train Station 1
+9305-ef07ca76,122-34ecc043,9305,-36.87252,174.74454,Kingsland Train Station 2
+9218-cd379d59,,9218,-36.99388,174.87739,Manukau Train Station
+9507-9d39710f,9218-cd379d59,9507,-36.99388,174.87739,Manukau Train Station 1
+9508-2ace599e,9218-cd379d59,9508,-36.99388,174.87739,Manukau Train Station 2
+98-0d95d0e0,,98,-37.02326,174.89617,Manurewa Train Station
+9222-11619061,98-0d95d0e0,9222,-37.02326,174.89617,Manurewa Train Station 1
+9223-b34cb60a,98-0d95d0e0,9223,-37.02325,174.89619,Manurewa Train Station 2
+136-2d5b76e2,,136,-36.86746,174.75838,Maungawhau Train Station
+9291-5f182165,136-2d5b76e2,9291,-36.86746,174.75838,Maungawhau Train Station 1
+9292-d09e2b35,136-2d5b76e2,9292,-36.86753,174.75839,Maungawhau Train Station 2
+9293-7c25c9c7,136-2d5b76e2,9293,-36.86805,174.75973,Maungawhau Train Station 3
+9294-b72bad92,136-2d5b76e2,9294,-36.86800,174.75876,Maungawhau Train Station 4
+117-197f7500,,117,-36.86631,174.82075,Meadowbank Train Station
+9402-5ba566c5,117-197f7500,9402,-36.86631,174.82075,Meadowbank Train Station 1
+9403-fe2811a0,117-197f7500,9403,-36.86627,174.82085,Meadowbank Train Station 2
+109-270a7792,,109,-36.96304,174.83896,Middlemore Train Station
+9212-eb593664,109-270a7792,9212,-36.96304,174.83896,Middlemore Train Station 1
+9213-2fb297e5,109-270a7792,9213,-36.96299,174.83904,Middlemore Train Station 2
+9243-95108c48,109-270a7792,9243,-36.96306,174.83892,Middlemore Train Station 3
+104-ff3dff29,,104,-36.87498,174.73521,Morningside Train Station
+9306-949f35aa,104-ff3dff29,9306,-36.87498,174.73521,Morningside Train Station 1
+9307-e1a4b463,104-ff3dff29,9307,-36.87502,174.73523,Morningside Train Station 2
+120-848dea07,,120,-36.88477,174.71408,Mt Albert Train Station
+9310-5e7a27e9,120-848dea07,9310,-36.88477,174.71408,Mt Albert Train Station 1
+9311-a4fe6bf8,120-848dea07,9311,-36.88479,174.71414,Mt Albert Train Station 2
+129-f22f268a,,129,-36.90938,174.68405,New Lynn Train Station
+9314-15d82116,129-f22f268a,9314,-36.90938,174.68405,New Lynn Train Station 1
+9315-bf1df522,129-f22f268a,9315,-36.90938,174.68405,New Lynn Train Station 2
+115-96c3c7be,,115,-36.86972,174.77883,Newmarket Train Station
+9100-2034265b,115-96c3c7be,9100,-36.86972,174.77883,Newmarket Train Station 1
+9102-40006383,115-96c3c7be,9102,-36.86972,174.77883,Newmarket Train Station 3
+9103-0e65d9b8,115-96c3c7be,9103,-36.86972,174.77884,Newmarket Train Station 2
+9104-87b89d4a,115-96c3c7be,9104,-36.86972,174.77885,Newmarket Train Station 4
+605-b9605c8e,,605,-36.92539,174.78680,Onehunga Train Station
+9503-bcf68071,605-b9605c8e,9503,-36.92539,174.78680,Onehunga Train Station
+116-214837ca,,116,-36.86242,174.80950,Orakei Train Station
+9400-7b603e75,116-214837ca,9400,-36.86242,174.80950,Orakei Train Station 1
+9401-f4f8af3d,116-214837ca,9401,-36.86230,174.80957,Orakei Train Station 2
+101-9ef61446,,101,-36.94669,174.83321,Otahuhu Train Station
+9209-8c9ed839,101-9ef61446,9209,-36.94669,174.83321,Otahuhu Train Station 3
+9210-25fbbf74,101-9ef61446,9210,-36.94669,174.83321,Otahuhu Train Station 1
+9211-b292c480,101-9ef61446,9211,-36.94669,174.83321,Otahuhu Train Station 2
+146-2dd62c35,,146,-37.15639,174.89768,Paerata Train Station
+9236-1a458359,146-2dd62c35,9236,-37.15639,174.89768,Paerata Train Station 1
+9237-f5d0ce7f,146-2dd62c35,9237,-37.15643,174.89780,Paerata Train Station 2
+130-782f74ad,,130,-36.89777,174.84967,Panmure Train Station
+9406-ffd612d1,130-782f74ad,9406,-36.89777,174.84967,Panmure Train Station 2
+9407-ebcb6116,130-782f74ad,9407,-36.89777,174.84967,Panmure Train Station 1
+97-cf37d972,,97,-37.06429,174.94611,Papakura Train Station
+9228-ba7409d9,97-cf37d972,9228,-37.06429,174.94611,Papakura Train Station 1
+9229-e27fe938,97-cf37d972,9229,-37.06427,174.94615,Papakura Train Station 2
+9230-b7b695a0,97-cf37d972,9230,-37.06430,174.94609,Papakura Train Station 3
+9516-3b468e5a,97-cf37d972,9516,-37.06430,174.94609,Papakura Train Station 4
+100-56c57897,,100,-36.97766,174.84925,Papatoetoe Train Station
+9214-6ac64c01,100-56c57897,9214,-36.97766,174.84925,Papatoetoe Train Station 1
+9215-e1c858e4,100-56c57897,9215,-36.97760,174.84941,Papatoetoe Train Station 2
+140-4f49e4da,,140,-36.85472,174.77739,Parnell Train Station
+9105-5aefbb78,140-4f49e4da,9105,-36.85472,174.77739,Parnell Train Station 1
+9106-cca709e4,140-4f49e4da,9106,-36.85470,174.77747,Parnell Train Station 2
+102-a4eddeea,,102,-36.91009,174.81570,Penrose Train Station
+9206-a65e85af,102-a4eddeea,9206,-36.91009,174.81570,Penrose Train Station 1
+9207-4bf0e6fc,102-a4eddeea,9207,-36.91007,174.81573,Penrose Train Station 2
+9500-e8f9ea3c,102-a4eddeea,9500,-36.91098,174.81541,Penrose Train Station 3
+108-5ab242b5,,108,-36.98975,174.85608,Puhinui Train Station
+9216-200a650e,108-5ab242b5,9216,-36.98975,174.85608,Puhinui Train Station 1
+9217-28451e3b,108-5ab242b5,9217,-36.98973,174.85614,Puhinui Train Station 2
+134-b31c4580,,134,-37.20331,174.91015,Pukekohe Train Station
+9232-aa69f681,134-b31c4580,9232,-37.20331,174.91015,Pukekohe Train Station 1
+9233-0f5634a3,134-b31c4580,9233,-37.20331,174.91015,Pukekohe Train Station 2
+9234-44ebb3c5,134-b31c4580,9234,-37.20351,174.91064,Pukekohe Train Station 3
+9235-c5795c6a,134-b31c4580,9235,-37.20351,174.91064,Pukekohe Train Station 4
+128-ae9d93ee,,128,-36.86793,174.60333,Ranui Train Station
+9326-4c79ef6c,128-ae9d93ee,9326,-36.86793,174.60333,Ranui Train Station 1
+9327-c03ec883,128-ae9d93ee,9327,-36.86793,174.60333,Ranui Train Station 2
+114-c06f0e9c,,114,-36.88138,174.78542,Remuera Train Station
+9200-215e746d,114-c06f0e9c,9200,-36.88138,174.78542,Remuera Train Station 1
+9201-2c983f68,114-c06f0e9c,9201,-36.88137,174.78544,Remuera Train Station 2
+126-c84c70ac,,126,-36.87346,174.62082,Sturges Rd Train Station
+9324-c21175ab,126-c84c70ac,9324,-36.87346,174.62082,Sturges Rd Train Station 1
+9325-6568c76a,126-c84c70ac,9325,-36.87352,174.62080,Sturges Rd Train Station 2
+121-5413495e,,121,-36.89686,174.63200,Sunnyvale Train Station
+9320-36be46d2,121-5413495e,9320,-36.89686,174.63200,Sunnyvale Train Station 1
+9321-50b6fd55,121-5413495e,9321,-36.89687,174.63186,Sunnyvale Train Station 2
+127-2affe079,,127,-36.86618,174.57630,Swanson Train Station
+9328-f6f84eac,127-2affe079,9328,-36.86618,174.57630,Swanson Train Station 1
+9329-e7f6fe12,127-2affe079,9329,-36.86618,174.57630,Swanson Train Station 2
+244-2141db40,,244,-36.91463,174.84260,Sylvia Park Train Station
+9408-f63dc486,244-2141db40,9408,-36.91463,174.84260,Sylvia Park Train Station 1
+9409-0339c98c,244-2141db40,9409,-36.91463,174.84260,Sylvia Park Train Station 2
+106-67be4ce1,,106,-37.04112,174.91945,Takaanini Train Station
+9226-a1e84e0d,106-67be4ce1,9226,-37.04112,174.91945,Takaanini Train Station 1
+9227-c9ab5758,106-67be4ce1,9227,-37.04103,174.91957,Takaanini Train Station 2
+107-90904690,,107,-37.03118,174.90609,Te Mahia Train Station
+9224-94ced837,107-90904690,9224,-37.03118,174.90609,Te Mahia Train Station 1
+9225-e65a3335,107-90904690,9225,-37.03116,174.90611,Te Mahia Train Station 2
+606-fecc85f6,,606,-36.92013,174.80137,Te Papapa Train Station
+9501-ce4fa451,606-fecc85f6,9501,-36.92013,174.80137,Te Papapa Train Station 1
+131-50330e47,,131,-36.84961,174.76299,Te Waihorotiu Train Station
+9297-5284e223,131-50330e47,9297,-36.84961,174.76299,Te Waihorotiu Train Station 1
+9298-64abb539,131-50330e47,9298,-36.84927,174.76316,Te Waihorotiu Train Station 2
+135-b78afdd1,,135,-36.84853,174.77934,The Strand Train Station
+9241-76884964,135-b78afdd1,9241,-36.84853,174.77934,The Strand Train Station 1
+9242-91d8ef29,135-b78afdd1,9242,-36.84843,174.77933,The Strand Train Station 2
+133-08da14b5,,133,-36.84431,174.76869,Waitemata Train Station
+9001-c9315521,133-08da14b5,9001,-36.84431,174.76869,Waitemata Train Station 1
+9002-ffdd37b7,133-08da14b5,9002,-36.84451,174.76897,Waitemata Train Station 2
+9003-1b6fbb46,133-08da14b5,9003,-36.84460,174.76903,Waitemata Train Station 3
+9004-91807f00,133-08da14b5,9004,-36.84460,174.76888,Waitemata Train Station 4

@@ -75,15 +75,17 @@ using only the mouse.
 
 - `R` - toggle orbital camera movement
 - Hold the left mouse button to pan the camera
-- Hold the middle mouse button to rotate the camera
-- Hold the right mouse button to zoom the camera
+- Hold the right mouse button to rotate the camera: it goes the way you drag, right round to the right of the point under the cursor and up to look down on it
+- Hold the middle mouse button and drag down to zoom out or up to zoom in, or turn the mouse wheel; both zoom towards the point under the cursor
 
 ### Visualization Toggles
 
 - `F1` - toggle this list of controls inside the app
 - `F2` - toggle the table of where each terrain's data came from
 - `F3` - toggle the Topo50 sheet grid over the terrain, coloured by the finest imagery downloaded, as does `show grid` in the F2 panel
-- Mouse wheel - raise or lower the sheet grid, once `wheel sets height` is ticked in the F2 panel
+- Mouse wheel - raise or lower the sheet grid, once `wheel sets height` is ticked in the F2 panel, which takes the wheel from the camera's zoom while ticked
+- `F4` - toggle Auckland's rail lines over the city, one colour per line
+- `F9` - toggle the station names over the rail lines, each anchored to the track at its station; F4 hides them with the lines
 - `W` - toggle wireframe view
 - `L` - toggle terrain data LOD view
 - `Y` - toggle terrain geometry LOD view
@@ -98,8 +100,39 @@ using only the mouse.
 - `G` - toggle texture sampling using gradients
 - `H` - toggle high precision coordinates
 - `F` - toggle freeze view frustum
-- Hold `Ctrl` - detach the culling camera: the terrain keeps loading and culling for the pose you had, while you fly off to look at it from outside
+- Hold `Ctrl` - detach the culling camera: the terrain keeps loading and culling for the pose you had, while you fly off to look at it from outside; the letter toggles stand aside while it is held, so Ctrl+S, Ctrl+Z and Ctrl+Y reach the rail editor, at the cost of two lines on the console per chord
 - `D` - toggle surface approximation debug
+
+### Rail Editor
+
+While editing, every point draws as a disc on its line: the line's colour for a ground point, amber for a fixed point and grey for a between point, and white when selected. A stretch between two anchors, a tunnel or a bridge, draws dashed whether editing or not, and while editing a stretch of ground steeper than 3.5 per cent, which rail does not climb, draws red to say a tunnel or a bridge is wanted there. The panel in the bottom right corner reads out the point last clicked: its line and index, latitude and longitude, the terrain under it, its height and what that means for its mode, and the grade of the two segments it joins, marked where steeper than rail climbs. Under the readout are the panel's buttons; one that cannot apply is dimmed, and while F4 hides the lines every button but `save` is, as the mouse and the keys are inert then. The gizmo stands on the point last clicked: a drag along the ground resamples the terrain under a ground point as it goes, and a lift changes a ground point's offset or a fixed point's height. The frames F6 shows are what the track models will be placed on: a transform every 25 m along a spline through the points, facing along the line and standing up from the ground, so a kink or a lean in them is a point to move.
+
+- `F5` - toggle the rail editor panel and editing: the discs draw, the mouse works on them, and the panel shows
+- `F6` - toggle the track frames: an arrow every 25 m along the line, a white tick up, a grey sleeper across, and the two running lines either side
+- `ground` / `fixed` / `between` - give the selection that mode: ground and fixed keep the point where it is, as an offset from the terrain under it or as a height of its own; between drops it onto the chord between its anchors
+- `drop to ground` - put the selection back on the terrain with no offset
+- `span selection` - make a tunnel or a bridge of three or more selected points on a line, its ends fixed where they are and the inside between
+- `select steep run` - grow the selection over the ground steeper than rail climbs either side of it, stopping at a stretch already spanned
+- `undo` / `redo` / `save` - what the keys below do
+- `prev` / `next` - step through the points the startup sampling found the ground moved under by more than a metre since the file was saved, selecting each and flying the camera to it
+- `Click` a disc - select that point; a click on the terrain leaves the selection as it is
+- `Shift`+click a disc on the same line - select the run of points from the last one clicked to it, which is how a tunnel is selected: click one portal, `Shift`+click the other; on another line it adds the point
+- `Double-click` the terrain beside a line - add a point to it there, on the ground
+- `Drag` the gizmo - move the selection: red arrow east, green up, blue south; green square along the ground, red and blue squares in a vertical wall; any lift turns a between point fixed
+- `Delete` - remove the selected points, keeping at least two on a line
+- `Escape` - clear the selection
+- `Ctrl+Z` / `Ctrl+Y` - undo and redo, up to 200 edits back
+- `Ctrl+S` - save the rail lines, edits and all, back to examples/spherical/plugins/auckland_rail/auckland_rail.csv, editor on or off, as the panel's `save` button does; a toast beside the panel says how many points were saved, or why not
+
+### Trains
+
+One carriage per line drives itself along the drawn track, end to end and back at 72 km/h on the left-hand running line, with its line, its unit and its speed above it, as a stand-in while there is no live feed. With `AT_API_KEY` set in the environment, a free key from a subscription on dev-portal.at.govt.nz, the carriages instead stand where Auckland Transport's realtime feed last reported each train on a trip, fetched every 10 seconds and run on between fetches at the speed each reported, and with each train's next stop and how late it runs from the trip updates feed, fetched every 30 seconds; a caption above the table says how many trains the feed has and how long ago it was fetched, or why there is no feed. The two feeds together are 480 calls an hour against the key's 35,000 a week, about 70 hours of running. A table in the bottom left corner lists the trains, each with its unit where the feed names one, how far along its line it is in kilometres, which way it is running, `>` in the file's point order and `<` back, its speed, and its next stop and how late it runs where the feed has said, and a camera icon on every row that puts a chase camera behind that train, 60 m back and 25 m up, looking a little ahead of it. While it rides, the mouse moves the camera round the train rather than the world.
+
+- `F7` - toggle the trains, and the table of them
+- `F8` - toggle the live feed: on, one carriage per train Auckland Transport reports, where it reports it; off, the stand-ins; nothing without `AT_API_KEY`
+- Camera icon in the trains table - follow that train with a chase camera, from behind, or at the zoom you had when switching from another train; click it again, press `Escape`, `T`, `R` or a fly key, or hide the trains to let go
+- Drag with the left or right button while following - orbit the camera round the train, right to go round its right and up to look down on it
+- Mouse wheel, or drag with the middle button, while following - zoom in and out, no nearer than 20 m and as far as you like
 
 ### Quality Adjustments
 

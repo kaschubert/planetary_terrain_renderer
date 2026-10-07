@@ -64,8 +64,8 @@ pub mod prelude {
 
     pub use crate::{
         debug::{
-            DebugCameraController, DebugTerrainMaterial, LoadingImages, OrbitalCameraController,
-            PointerCapture, TerrainDebugPlugin,
+            ClaimsPointer, DebugCameraController, DebugTerrainMaterial, LoadingImages,
+            OrbitalCameraController, PointerCapture, TerrainDebugPlugin,
         },
         math::{TerrainShape, TileCoordinate},
         picking::{PickingData, TerrainPickingPlugin},
@@ -78,7 +78,8 @@ pub mod prelude {
         spawn::SpawnTerrainCommandsExt,
         terrain::TerrainConfig,
         terrain_data::{
-            AttachmentConfig, AttachmentFormat, AttachmentLabel, GpuTileAtlas, TileAtlas, TileTree,
+            AttachmentConfig, AttachmentFormat, AttachmentLabel, GpuTileAtlas,
+            TerrainHeightSampler, TileAtlas, TileTree,
         },
         terrain_view::{CullingCamera, CullingPose, TerrainViewComponents, TerrainViewConfig},
     };
