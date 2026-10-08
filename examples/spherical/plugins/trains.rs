@@ -56,13 +56,13 @@ pub const CARRIAGE_LENGTH: f32 = 24.0;
 /// The model's bounding box, measured from the file, in its own units: x along the carriage,
 /// y up and z across, the origin at its centre. The scale and the lift are derived from it
 /// rather than typed in, so a model with another box needs only these two lines changed.
-const MODEL_MIN: Vec3 = Vec3::new(-0.955, -0.285, -0.136);
-const MODEL_MAX: Vec3 = Vec3::new(0.951, 0.282, 0.132);
+const MODEL_MIN: Vec3 = Vec3::new(-0.500, -0.147, -0.082);
+const MODEL_MAX: Vec3 = Vec3::new(0.500, 0.146, 0.081);
 
 /// The one scale on all three axes that makes the model CARRIAGE_LENGTH long. The model is
 /// chunkier than the real car, so at a car's length it comes out some seven metres tall and
-/// three and a half wide against the real 3.9 and 2.8; a scale per axis would thin it to
-/// true and distort whatever the modeller drew on it. Accepted as it is.
+/// close to four wide against the real 3.9 and 2.8; a scale per axis would thin it to true
+/// and distort whatever the modeller drew on it. Accepted as it is.
 const MODEL_SCALE: f32 = CARRIAGE_LENGTH / (MODEL_MAX.x - MODEL_MIN.x);
 
 /// How far the model is lifted along the frame's up, in metres. The model's origin is at its
@@ -74,8 +74,10 @@ const MODEL_LIFT: f32 = -MODEL_MIN.y * MODEL_SCALE;
 /// where a photo marker riding the train floats from.
 pub const CARRIAGE_HEIGHT: f32 = (MODEL_MAX.y - MODEL_MIN.y) * MODEL_SCALE;
 
-/// The model, under the asset root. One carriage, one mesh, 8 MB, untracked in git.
-const MODEL_PATH: &str = "models/Meshy_AI_Auckland_Metro_Glide_0929051957_texture.glb";
+/// The model, under the asset root. One carriage, one mesh, 6.6 MB: the low-poly draw of the
+/// carriage, 4,000 triangles where the first was 79,000, at the same proportions, so only
+/// the box above changed with it.
+const MODEL_PATH: &str = "models/Meshy_AI_Auckland_transport_tr_1008091855_texture.glb";
 
 pub struct TrainsPlugin;
 
