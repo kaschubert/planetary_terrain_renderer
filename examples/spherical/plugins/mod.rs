@@ -4,6 +4,7 @@
 
 pub mod auckland_rail;
 pub mod live_trains;
+pub mod photo_markers;
 pub mod provenance;
 pub mod rail_editor;
 pub mod shared;

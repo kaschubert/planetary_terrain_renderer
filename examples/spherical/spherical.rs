@@ -11,6 +11,7 @@ use transform_gizmo_bevy::{GizmoCamera, TransformGizmoPlugin};
 mod plugins;
 use plugins::auckland_rail::AucklandRailPlugin;
 use plugins::live_trains::LiveTrainsPlugin;
+use plugins::photo_markers::PhotoMarkersPlugin;
 use plugins::provenance::ProvenancePlugin;
 use plugins::rail_editor::RailEditorPlugin;
 use plugins::sheet_grid::SheetGridPlugin;
@@ -148,6 +149,7 @@ fn main() {
                 RailEditorPlugin,   // selecting, adding and removing the lines' points, on F5
                 TrackFramesPlugin,  // the track frames the models stand on, every 25 m, on F6
                 StationsPlugin,     // the station names over the lines, on F9
+                PhotoMarkersPlugin, // photos pinned over the terrain, on Ctrl+click and F10
                 TrainsPlugin,       // one carriage per line, driving along the track, on F7
                 // The carriages where Auckland Transport's feed puts the trains, on F8, with
                 // the key from AT_API_KEY; tests.rs adds it without one, so it never fetches.

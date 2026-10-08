@@ -372,9 +372,14 @@ fn load_network(path: &Path) -> (RailNetwork, bool) {
 /// Writes through a temporary file in the same directory, renamed over the target once it
 /// is complete and on disk, so a crash mid-write leaves the old file whole rather than half
 /// of a new one. The rename is atomic because the two are on the same filesystem, which the
-/// same directory guarantees.
-fn write_atomically(path: &Path, contents: &str) -> io::Result<()> {
-    let temporary = path.with_extension("csv.tmp");
+/// same directory guarantees. The photo markers save their file this way too, which is why
+/// the temporary's extension is the target's and not a fixed one.
+pub(crate) fn write_atomically(path: &Path, contents: &str) -> io::Result<()> {
+    let extension = path
+        .extension()
+        .map(|extension| format!("{}.tmp", extension.to_string_lossy()))
+        .unwrap_or_else(|| "tmp".to_string());
+    let temporary = path.with_extension(extension);
 
     let written = File::create(&temporary).and_then(|mut file| {
         file.write_all(contents.as_bytes())?;

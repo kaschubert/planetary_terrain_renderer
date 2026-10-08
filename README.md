@@ -135,6 +135,20 @@ One carriage per line drives itself along the drawn track, end to end and back a
 - Drag with the left or right button while following - orbit the camera round the train, right to go round its right and up to look down on it
 - Mouse wheel, or drag with the middle button, while following - zoom in and out, no nearer than 20 m and as far as you like
 
+### Photo Markers
+
+A marker from `assets/models/marker.glb` stands over the terrain wherever you Ctrl+click it: a plate in a colour you pick, floating 10 m above the ground on the ellipsoid's up, with a screen set into its front that a photo dropped on the window goes onto. It turns about its own up every frame so the screen faces the camera, and is drawn 130 m tall, which is what looked right by eye from a kilometre up: a marker is a label on the landscape rather than a thing standing in it. Control is what makes the click safe: the camera pans on the same button and would otherwise drag the view out from under the press. The terrain pick is of the terrain alone, so a Ctrl+click through a marker places on the ground behind it rather than on the marker. A dropped photo goes to the selected marker and not to the screen under the pointer, which cannot be known: the drop carries no cursor position, so while a file hovers the window the selected screen brightens to say where it would land. Only png and jpeg decode in this build; a phone's orientation tag is honoured and anything longer than 2048 px is shrunk before it goes to the GPU. The panel in the bottom right corner reads out the marker selected, its place and its photo, and holds the colour: hue, saturation and value on sliders with a gradient under each track, a swatch with the hex code, and eight presets with the default very light grey first. The markers are saved to `examples/spherical/plugins/photo_markers/markers.ron`, each with the path of the photo on it, and come back next run with their pictures: the files are read again as the markers are spawned. One whose file has moved comes back blank and says which photo is missing in the readout, keeping the path, so putting the file back and starting again is all it takes. How big a marker should be is still being settled by eye: the `size` slider sets the drawn height while the example runs, and `note size` appends what it is on, how far the camera is and how many pixels the marker covers to `examples/spherical/plugins/photo_markers/marker_sizes.csv`, so a few judgements from different distances say what the rule should be.
+
+- `F10` - toggle the photo markers panel, which turns the rail editor off as F5 turns this off: both want the corner, `Delete` and `Escape`
+- `Ctrl`+click the terrain - place a marker 10 m over the ground there, in the panel's colour, and select it; it works whether the panel is open or not
+- `Click` a marker - select it, with or without the panel open, so a photo can be dropped on it; a white ring says which one is selected, and the readout and the colour controls take its colour and photo
+- Drop a `.png` or `.jpg` on the window - put it on the selected marker's screen, letterboxed so the whole photo shows
+- `Delete` - remove the selected marker, while the panel is open; `Escape` - clear the selection
+- `hue` / `saturation` / `value` - the selected marker's colour, or the colour the next marker takes while none is selected
+- `size` - how tall every marker is drawn, 2 to 400 m and 130 m to begin with, judged against the line above the sliders saying how many pixels the selected one covers and how far off it is
+- `floor` - the smallest a marker is ever drawn on screen, in pixels, so a distant one stays findable the way a map pin does; off to begin with, so that the size slider is the only thing deciding
+- `note size` / `clear photo` / `remove` / `save` - write the size and the view to marker_sizes.csv, take the photo off the screen, remove the marker, write the markers to their file
+
 ### Quality Adjustments
 
 - `N` - decrease blend distance
@@ -148,6 +162,8 @@ One carriage per line drives itself along the drawn track, end to end and back a
 
 When enabling the `metal_capture` feature, you can trigger a GPU frame capture using the `C` key.
 Recorded captures are stored in the `captures` directory of the project.
+Note that `C` also detaches the culling camera, so with this feature on the two share the key; the
+feature is macOS only, and the culling camera's key is one line in `src/debug/mod.rs` to change.
 They can be examined and analyzed using Xcode.
 
 ## Attribution

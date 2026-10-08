@@ -36,7 +36,8 @@ use discs::draw_point_discs;
 use move_gizmo::{MoveDrag, apply_drag, configure_move_gizmo, place_handle};
 use std::collections::HashMap;
 
-mod clicks;
+/// Telling a click from the start of a camera pan; the photo markers borrow it too.
+pub(crate) mod clicks;
 mod discs;
 /// The east, north and up frame the gizmo and the fly-to stand on; other plugins' tests
 /// borrow it too.
