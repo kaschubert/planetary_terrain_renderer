@@ -49,15 +49,15 @@ pub(super) const MARKER_HEIGHT: f32 = 130.0;
 /// How far the base floats above the terrain, in metres.
 pub(super) const HOVER_HEIGHT: f64 = 10.0;
 
-/// The pixel floor a marker starts with: none. Further away than its floor a marker is scaled up
-/// to hold that many pixels, the way a map pin stays a pin however far out the map goes, and zero
-/// leaves a true world-sized object that shrinks into a dot.
+/// The smallest a marker is ever drawn on screen, in pixels. Further away than this it is scaled
+/// up to hold that height, the way a map pin stays a pin however far out the map goes, and zero
+/// would leave a true world-sized object that shrinks into a dot.
 ///
-/// Off to begin with because the floor and the size answer the same question, and while the size
-/// is being settled by eye a floor would make the slider look dead at any distance: it would hold
-/// the marker at the floor's height whatever the slider said. Once the sizes come back from the
-/// panel's samples, one or the other is what the marker keeps, see marker_sizes.csv.
-pub(super) const MIN_PIXELS: f32 = 0.0;
+/// A hundred pixels, which is what the sizing samples came back saying: in every one of them the
+/// marker stood at its floor rather than at its height, so what was being judged by eye was this
+/// and not the metres. Beyond about 1.7 km it is the floor that decides how big a marker is, and
+/// MARKER_HEIGHT only matters nearer than that. See marker_sizes.csv.
+pub(super) const MIN_PIXELS: f32 = 100.0;
 
 /// The size range the panel's slider covers, in metres: small enough to be a pin on a hillside,
 /// large enough to be read from well out. The top is three times the default rather than just

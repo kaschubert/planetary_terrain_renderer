@@ -181,15 +181,42 @@ fn a_far_marker_is_scaled_up_to_the_pixel_floor_and_a_near_one_is_left_alone() {
 
 #[test]
 fn a_floor_of_zero_never_scales_anything() {
-    // Which is how it starts, so that the size slider is the only thing deciding how big a
-    // marker is while that is being settled by eye.
-    assert_eq!(MIN_PIXELS, 0.0);
-
+    // Turning the floor off is how a marker is made a true world-sized object, shrinking into a
+    // dot like anything else on the ground. The slider reaches zero for that.
     let focal_pixels = opening_focal_pixels();
     for distance in [10.0, 1_000.0, 100_000.0] {
-        let scale = pixel_floor_scale(MARKER_HEIGHT, distance, focal_pixels, MIN_PIXELS);
+        let scale = pixel_floor_scale(MARKER_HEIGHT, distance, focal_pixels, 0.0);
         assert_eq!(scale, 1.0, "scaled at {distance} m with the floor off");
     }
+}
+
+#[test]
+fn the_floor_takes_over_from_the_height_beyond_about_two_kilometres() {
+    // Which is the shape of the answer the sizing samples gave: past a point the floor is what
+    // decides how big a marker is, and the height only matters nearer than that. Worked out
+    // rather than typed in, so it still describes the defaults if either is moved.
+    let focal_pixels = opening_focal_pixels();
+    let crossover = (MARKER_HEIGHT * focal_pixels / MIN_PIXELS) as f64;
+
+    // Nearer than the crossover the marker is its own size.
+    let near = pixel_floor_scale(MARKER_HEIGHT, crossover * 0.5, focal_pixels, MIN_PIXELS);
+    assert_eq!(near, 1.0, "the height should decide inside {crossover} m");
+
+    // Beyond it the floor holds the marker at exactly its pixels, however far out it goes.
+    for distance in [crossover * 2.0, crossover * 50.0] {
+        let scale = pixel_floor_scale(MARKER_HEIGHT, distance, focal_pixels, MIN_PIXELS);
+        let pixels = apparent_pixels(MARKER_HEIGHT * scale, distance, focal_pixels);
+        assert!(
+            (pixels - MIN_PIXELS).abs() < 1e-3,
+            "{pixels} px at {distance} m, wanted {MIN_PIXELS}"
+        );
+    }
+
+    // And the crossover is the 1.7 km the constant's own comment claims.
+    assert!(
+        (1_600.0..1_800.0).contains(&crossover),
+        "crossover at {crossover} m"
+    );
 }
 
 #[test]
