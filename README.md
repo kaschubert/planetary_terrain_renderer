@@ -77,6 +77,7 @@ using only the mouse.
 - Hold the left mouse button to pan the camera
 - Hold the right mouse button to rotate the camera: it goes the way you drag, right round to the right of the point under the cursor and up to look down on it
 - Hold the middle mouse button and drag down to zoom out or up to zoom in, or turn the mouse wheel; both zoom towards the point under the cursor
+- Turn the wheel while the right button is held to draw in and out along the orbit, keeping the point you are turning about where it is
 
 ### Visualization Toggles
 
