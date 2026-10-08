@@ -1,4 +1,4 @@
-//! The F10 panel: which marker is selected, and the colour its plate is painted.
+//! The F10 panel: which marker is selected, what colour it is, and how its card is drawn.
 //!
 //! Bottom right, in the F5 panel's style, and F10 stands the rail editor down as F5 stands this
 //! down, so the corner, Delete and Escape have one owner at a time. The buttons are Bevy's
@@ -19,7 +19,7 @@ use bevy::ui_widgets::{
 };
 use bevy::{prelude::*, text::FontSize};
 
-use super::model::{MARKER_HEIGHT, MAX_HEIGHT, MIN_HEIGHT, MIN_PIXELS};
+use super::card::{CARD_PIXELS, CORNER_RADIUS, MAX_CARD, MAX_RADIUS, MIN_CARD, MIN_RADIUS};
 use super::{DEFAULT_COLOUR, MarkerView, PhotoMarkerSystems, PhotoMarkers, file, photo};
 use crate::plugins::provenance::ascii;
 use crate::plugins::rail_editor::RailEditor;
@@ -92,7 +92,7 @@ const PRESETS: [(&str, Hsva); 8] = [
 
 /// The panel itself, shown while marker mode is on.
 #[derive(Component)]
-struct MarkerPanel;
+pub(super) struct MarkerPanel;
 
 /// The text describing the selection.
 #[derive(Component)]
@@ -207,7 +207,6 @@ struct Caption;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Action {
-    NoteSize,
     ClearPhoto,
     Remove,
     Save,
@@ -220,19 +219,16 @@ struct Readiness {
     selected: bool,
     has_photo: bool,
     can_save: bool,
-    /// Whether a marker is on screen to measure, which is what a size sample is of.
-    has_view: bool,
 }
 
 impl Readiness {
-    fn of(markers: &PhotoMarkers, view: &MarkerView) -> Self {
+    fn of(markers: &PhotoMarkers) -> Self {
         Self {
             selected: markers.selected.is_some(),
             has_photo: markers
                 .selected()
                 .is_some_and(|marker| marker.photo.is_some()),
             can_save: markers.can_save(),
-            has_view: view.0.is_some(),
         }
     }
 }
@@ -240,7 +236,6 @@ impl Readiness {
 impl Action {
     fn caption(self) -> &'static str {
         match self {
-            Self::NoteSize => "note size",
             Self::ClearPhoto => "clear photo",
             Self::Remove => "remove",
             Self::Save => "save",
@@ -251,7 +246,6 @@ impl Action {
     /// it; saving wants something unsaved and a file it may write over.
     fn enabled(self, readiness: Readiness) -> bool {
         match self {
-            Self::NoteSize => readiness.has_view,
             Self::ClearPhoto => readiness.has_photo,
             Self::Remove => readiness.selected,
             Self::Save => readiness.can_save,
@@ -384,36 +378,36 @@ fn spawn_slider(panel: &mut RelatedSpawnerCommands<ChildOf>, channel: Channel, c
 /// together: a size that reads well overhead is a speck from orbit unless a floor catches it.
 #[derive(Component, Clone, Copy, PartialEq, Eq)]
 enum Size {
-    Height,
-    Floor,
+    Card,
+    Corner,
 }
 
 impl Size {
     fn name(self) -> &'static str {
         match self {
-            Self::Height => "size",
-            Self::Floor => "floor",
+            Self::Card => "card",
+            Self::Corner => "corner",
         }
     }
 
     fn range(self) -> SliderRange {
         match self {
-            Self::Height => SliderRange::new(MIN_HEIGHT, MAX_HEIGHT),
-            Self::Floor => SliderRange::new(0.0, 200.0),
+            Self::Card => SliderRange::new(MIN_CARD, MAX_CARD),
+            Self::Corner => SliderRange::new(MIN_RADIUS, MAX_RADIUS),
         }
     }
 
     fn of(self, markers: &PhotoMarkers) -> f32 {
         match self {
-            Self::Height => markers.height,
-            Self::Floor => markers.min_pixels,
+            Self::Card => markers.card_pixels,
+            Self::Corner => markers.corner_radius,
         }
     }
 
     fn set(self, markers: &mut PhotoMarkers, value: f32) {
         match self {
-            Self::Height => markers.height = value,
-            Self::Floor => markers.min_pixels = value,
+            Self::Card => markers.card_pixels = value,
+            Self::Corner => markers.corner_radius = value,
         }
     }
 
@@ -427,9 +421,9 @@ impl Size {
 
     fn reading(self, markers: &PhotoMarkers) -> String {
         match self {
-            Self::Height => format!("{:.0} m", markers.height),
-            Self::Floor if markers.min_pixels < 1.0 => "off".to_string(),
-            Self::Floor => format!("{:.0} px", markers.min_pixels),
+            Self::Card => format!("{:.0} px", markers.card_pixels),
+            Self::Corner if markers.corner_radius < 0.5 => "square".to_string(),
+            Self::Corner => format!("{:.0} px", markers.corner_radius),
         }
     }
 }
@@ -527,7 +521,7 @@ fn spawn_size_slider(panel: &mut RelatedSpawnerCommands<ChildOf>, size: Size, va
 
 fn spawn_panel(mut commands: Commands) {
     let colour = DEFAULT_COLOUR;
-    let (height, floor) = (MARKER_HEIGHT, MIN_PIXELS);
+    let (card, corner) = (CARD_PIXELS, CORNER_RADIUS);
 
     commands
         .spawn((
@@ -562,8 +556,8 @@ fn spawn_panel(mut commands: Commands) {
                 TextColor(Color::srgb(0.7, 0.78, 0.82)),
             ));
 
-            spawn_size_slider(panel, Size::Height, height);
-            spawn_size_slider(panel, Size::Floor, floor);
+            spawn_size_slider(panel, Size::Card, card);
+            spawn_size_slider(panel, Size::Corner, corner);
 
             panel.spawn(row()).with_children(|line| {
                 line.spawn((
@@ -603,12 +597,7 @@ fn spawn_panel(mut commands: Commands) {
             });
 
             panel.spawn(row()).with_children(|actions| {
-                for action in [
-                    Action::NoteSize,
-                    Action::ClearPhoto,
-                    Action::Remove,
-                    Action::Save,
-                ] {
+                for action in [Action::ClearPhoto, Action::Remove, Action::Save] {
                     spawn_button(actions, action);
                 }
             });
@@ -650,11 +639,10 @@ fn show_panel(markers: Res<PhotoMarkers>, mut panel: Single<&mut Visibility, Wit
 fn press_buttons(
     mut commands: Commands,
     mut markers: ResMut<PhotoMarkers>,
-    view: Res<MarkerView>,
-    mut materials: ResMut<Assets<StandardMaterial>>,
+    mut cards: Query<&mut ImageNode>,
     buttons: Query<(&MarkerButton, &Interaction), Changed<Interaction>>,
 ) {
-    let readiness = Readiness::of(&markers, &view);
+    let readiness = Readiness::of(&markers);
 
     for (button, interaction) in &buttons {
         if *interaction != Interaction::Pressed || !button.0.enabled(readiness) {
@@ -662,20 +650,11 @@ fn press_buttons(
         }
 
         match button.0 {
-            Action::NoteSize => {
-                if let Some(sample) = view.0 {
-                    file::note_size(&markers, &sample);
-                }
-            }
             Action::ClearPhoto => {
                 if let Some(marker) = markers.selected_mut() {
-                    let handle = marker.screen_material.clone();
-                    photo::clear_photo(
-                        &mut marker.photo,
-                        &mut marker.missing,
-                        handle.as_ref(),
-                        &mut materials,
-                    );
+                    let card = marker.card;
+                    photo::clear_photo(&mut marker.photo, &mut marker.missing, &mut marker.aspect);
+                    super::card::clear_card(card, &mut cards);
                     markers.dirty = true;
                 }
             }
@@ -721,10 +700,9 @@ fn button_colour(interaction: Interaction, enabled: bool) -> Color {
 /// is skipped when the colour is already right.
 fn colour_buttons(
     markers: Res<PhotoMarkers>,
-    view: Res<MarkerView>,
     mut buttons: Query<(&MarkerButton, &Interaction, &mut BackgroundColor)>,
 ) {
-    let readiness = Readiness::of(&markers, &view);
+    let readiness = Readiness::of(&markers);
 
     for (button, interaction, mut background) in &mut buttons {
         let colour = button_colour(*interaction, button.0.enabled(readiness));
@@ -735,11 +713,10 @@ fn colour_buttons(
 /// Greys the caption of a button that cannot apply, and whitens it again when it can.
 fn dim_buttons(
     markers: Res<PhotoMarkers>,
-    view: Res<MarkerView>,
     buttons: Query<&MarkerButton>,
     mut captions: Query<(&ChildOf, &mut TextColor), With<Caption>>,
 ) {
-    let readiness = Readiness::of(&markers, &view);
+    let readiness = Readiness::of(&markers);
 
     for (child_of, mut colour) in &mut captions {
         let Ok(button) = buttons.get(child_of.parent()) else {
@@ -754,30 +731,19 @@ fn dim_buttons(
     }
 }
 
-/// Paints the selected marker's plate the colour the sliders hold, and keeps the swatch and the
-/// hex beside them. The material is the marker's own, so no other marker changes.
+/// Keeps the swatch and the hex beside the sliders showing the colour they hold.
+///
+/// Nothing else is painted from here. The plate the colour used to go on has gone, and
+/// a card is the photograph and nothing else; the marker's own colour is drawn on its dot, and
+/// on the tether once there is one, both of which read it straight off the marker each frame.
 fn apply_colour(
     markers: Res<PhotoMarkers>,
-    mut materials: ResMut<Assets<StandardMaterial>>,
     mut swatch: Single<&mut BackgroundColor, With<ColourSwatch>>,
     mut hex: Single<&mut Text, With<ColourHex>>,
 ) {
     let colour = markers.colour;
     swatch.set_if_neq(BackgroundColor(colour.into()));
     hex.set_if_neq(Text::new(hex_of(colour)));
-
-    for marker in &markers.markers {
-        let Some(handle) = &marker.body_material else {
-            continue;
-        };
-        let Some(mut material) = materials.get_mut(handle) else {
-            continue;
-        };
-        let wanted: Color = marker.colour.into();
-        if material.base_color != wanted {
-            material.base_color = wanted;
-        }
-    }
 }
 
 /// Brings the sliders to the colour whenever it changes from under them: a marker selected by a
@@ -895,25 +861,17 @@ fn update_size_readout(
         text.set_if_neq(Text::new(reading.0.reading(&markers)));
     }
 
-    let text = match view.0 {
-        Some(sample) => format!(
-            "{:.0} px tall, {} away, camera {} up",
-            sample.pixels,
-            metres(sample.distance),
-            metres(sample.altitude),
-        ),
-        None => "select a marker to size it against the ground".to_string(),
-    };
-
-    readout.set_if_neq(Text::new(text));
+    readout.set_if_neq(Text::new(view_text(view.shown, view.total)));
 }
 
-/// A distance in metres or kilometres, whichever reads better.
-fn metres(distance: f64) -> String {
-    match distance {
-        distance if distance >= 10_000.0 => format!("{:.0} km", distance / 1000.0),
-        distance if distance >= 1_000.0 => format!("{:.1} km", distance / 1000.0),
-        distance => format!("{distance:.0} m"),
+/// What the panel says about how many of the markers actually have a card on screen, which is
+/// what tells you whether the card slider has gone too big: the layout drops the furthest when
+/// there is no room left down the sides.
+pub(super) fn view_text(shown: usize, total: usize) -> String {
+    match (shown, total) {
+        (_, 0) => "no markers yet: Ctrl+click the ground".to_string(),
+        (0, total) => format!("none of {total} shown"),
+        (shown, total) => format!("{shown} of {total} shown"),
     }
 }
 

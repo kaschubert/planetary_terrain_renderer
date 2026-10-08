@@ -16,7 +16,8 @@ use bevy_terrain::prelude::TerrainShape;
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 
-use super::{MarkerId, PhotoMarker, PhotoMarkers, SizeSample};
+use super::card::{CARD_PIXELS, CORNER_RADIUS, EMPTY_ASPECT};
+use super::{MarkerId, PhotoMarker, PhotoMarkers};
 use crate::plugins::auckland_rail::write_atomically;
 use crate::plugins::shared::rail_network::utc_now;
 
@@ -62,8 +63,8 @@ impl SavedMarker {
         }
     }
 
-    /// The marker this stands for, with no entity or materials yet: spawn_markers gives it those
-    /// once the big_space root and the model are there.
+    /// The marker this stands for, with no card yet: card::spawn_cards gives it one on the
+    /// frame after it is read.
     fn marker(&self, id: MarkerId) -> PhotoMarker {
         PhotoMarker {
             id,
@@ -72,16 +73,16 @@ impl SavedMarker {
             colour: Hsva::hsv(self.hue, self.saturation, self.value),
             photo: self.photo.clone(),
             // Whether the file is still there is found out by trying to read it, see
-            // spawn_markers, not by anything the saved file could have said.
+            // spawn_cards, not by anything the saved file could have said.
             missing: false,
             // A marker is written down where it last was, riding or not: an entity means
             // nothing in a new run, and the trains it could have ridden are not there yet.
             riding: None,
             at: TerrainShape::WGS84
                 .position_unit_to_local(unit_position(self.longitude, self.latitude), self.ground),
-            entity: None,
-            body_material: None,
-            screen_material: None,
+            // Both settled when the photo is decoded, see poll_photos.
+            aspect: EMPTY_ASPECT,
+            card: None,
         }
     }
 }
@@ -140,8 +141,8 @@ impl PhotoMarkers {
             next_id,
             file_unreadable,
             colour: super::DEFAULT_COLOUR,
-            height: super::model::MARKER_HEIGHT,
-            min_pixels: super::model::MIN_PIXELS,
+            card_pixels: CARD_PIXELS,
+            corner_radius: CORNER_RADIUS,
             ..default()
         }
     }
@@ -182,58 +183,5 @@ pub(super) fn save_markers(markers: &mut PhotoMarkers) {
     match markers.save() {
         Ok(count) => info!("photo markers: {count} saved"),
         Err(message) => error!("photo markers: {message}"),
-    }
-}
-
-/// Where the size samples go: one row per press of the panel's `note size`, appended, so that a
-/// session of flying about and sizing markers by eye leaves a table to read afterwards.
-pub(super) const SIZES_PATH: &str = concat!(
-    env!("CARGO_MANIFEST_DIR"),
-    "/examples/spherical/plugins/photo_markers/marker_sizes.csv"
-);
-
-/// The columns, written once when the file is new.
-const SIZES_HEADER: &str = "# How big a marker looked right, one row per press of `note size` in the F10 panel.\n\
-                            # height_m is what the size slider was on, floor_px the pixel floor beside it,\n\
-                            # distance_m how far the camera was from the marker and altitude_m how high it was,\n\
-                            # pixels how tall the marker stood on screen, and the last two what the window was.\n\
-                            saved_at,height_m,floor_px,distance_m,altitude_m,pixels,viewport_px,fov_deg\n";
-
-/// One row of the size table, as it is written.
-pub(super) fn size_row(saved_at: &str, height: f32, floor: f32, sample: &SizeSample) -> String {
-    format!(
-        "{saved_at},{height:.1},{floor:.0},{:.0},{:.0},{:.1},{:.0},{:.1}\n",
-        sample.distance, sample.altitude, sample.pixels, sample.viewport, sample.fov,
-    )
-}
-
-/// Appends a size sample, writing the header first when the file is new. Appended rather than
-/// written whole, because the point of it is a session's worth of judgements and losing the
-/// earlier ones to a crash or a restart would waste the flying.
-pub(super) fn note_size(markers: &PhotoMarkers, sample: &SizeSample) {
-    use std::io::Write;
-
-    let path = Path::new(SIZES_PATH);
-    let fresh = !path.exists();
-
-    let written = std::fs::OpenOptions::new()
-        .create(true)
-        .append(true)
-        .open(path)
-        .and_then(|mut file| {
-            if fresh {
-                file.write_all(SIZES_HEADER.as_bytes())?;
-            }
-            file.write_all(
-                size_row(&utc_now(), markers.height, markers.min_pixels, sample).as_bytes(),
-            )
-        });
-
-    match written {
-        Ok(()) => info!(
-            "photo markers: noted {:.0} m at {:.0} m away, {:.0} px on screen",
-            markers.height, sample.distance, sample.pixels
-        ),
-        Err(error) => error!("photo markers: {}: {error}", path.display()),
     }
 }

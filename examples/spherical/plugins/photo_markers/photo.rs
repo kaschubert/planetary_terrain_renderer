@@ -10,10 +10,12 @@
 //! Decoding is a job for another thread: a twelve megapixel jpeg takes hundreds of milliseconds,
 //! which on the main one would be a visible hitch. The task is polled each frame, the shape the
 //! live feed's fetch uses. What it returns is already the texture's pixels: the image crate
-//! applies the orientation a phone wrote into the file, shrinks anything longer than
-//! MAX_PHOTO_EDGE so that a 24 megapixel photo does not cost 96 MB of video memory, and letterboxes
-//! the result onto a canvas the shape of the screen quad, so that the photo keeps its proportions
-//! and the material needs no transform of its own.
+//! applies the orientation a phone wrote into the file and shrinks anything longer than
+//! MAX_PHOTO_EDGE, so that a 24 megapixel photo does not cost 96 MB of video memory.
+//!
+//! Nothing is letterboxed any more. The quad this used to go on had a fixed shape, so a photo had
+//! to be padded onto it; a card has no shape of its own and takes the photo's, so what the decode
+//! hands over is the photograph and the bars are gone with the frame.
 
 use bevy::asset::RenderAssetUsages;
 use bevy::image::{Image, ImageSampler};
@@ -25,8 +27,8 @@ use image::{DynamicImage, ImageDecoder, ImageReader, imageops::FilterType};
 use std::io::Cursor;
 use std::path::{Path, PathBuf};
 
-use super::model::SCREEN_ASPECT;
-use super::{BLANK_SCREEN, MarkerId, PhotoMarkers};
+use super::card::{self, MarkerCard};
+use super::{MarkerId, PhotoMarkers};
 
 /// The longest edge a photo is kept at, in pixels. A screen a few metres across is never drawn
 /// at more than a few hundred pixels, so this is already generous; it is the cap that keeps a
@@ -34,13 +36,10 @@ use super::{BLANK_SCREEN, MarkerId, PhotoMarkers};
 /// bytes with no mip levels to fall back on.
 const MAX_PHOTO_EDGE: u32 = 2048;
 
-/// The bars a letterboxed photo is padded with: the blank screen's colour, so a portrait photo
-/// looks like a picture on a screen rather than one floating on a grey card.
-const LETTERBOX: [u8; 4] = [20, 23, 26, 255];
-
-/// How much brighter the selected screen goes while a file hovers the window, so it is clear
-/// which marker a drop would land on.
-const HOVER_TINT: Color = Color::srgb(0.45, 0.5, 0.55);
+/// What the selected card is tinted while a file hovers the window, so it is clear which marker
+/// a drop would land on. A wash rather than a brightening: an empty card is already cream, and
+/// there is nothing above cream to go to.
+const HOVER_TINT: Color = Color::srgb(0.62, 0.78, 0.86);
 
 /// The formats this build can decode. Bevy turns on png by default and the example adds jpeg for
 /// the carriage's textures; webp, heic, tiff and the rest are not compiled in, so a drop of one
@@ -58,9 +57,9 @@ pub(super) struct PhotoTask {
 
 /// A decoded photo, ready to become a texture.
 pub(super) struct Photo {
-    /// The canvas: the photo letterboxed onto the screen's shape, RGBA, sRGB.
+    /// The photograph itself, RGBA, sRGB, at its own proportions.
     image: Image,
-    /// What the file held, before the shrink and the letterbox, for the log.
+    /// What the file held, before the shrink, for the log.
     source: UVec2,
 }
 
@@ -111,7 +110,7 @@ pub(super) fn poll_photos(
     mut commands: Commands,
     mut markers: ResMut<PhotoMarkers>,
     mut images: ResMut<Assets<Image>>,
-    mut materials: ResMut<Assets<StandardMaterial>>,
+    mut cards: Query<&mut ImageNode>,
     mut tasks: Query<(Entity, &mut PhotoTask)>,
 ) {
     for (entity, mut task) in &mut tasks {
@@ -145,17 +144,12 @@ pub(super) fn poll_photos(
         else {
             continue;
         };
-        let Some(handle) = marker.screen_material.clone() else {
-            continue;
-        };
-        let Some(mut material) = materials.get_mut(&handle) else {
-            continue;
-        };
 
         let size = photo.image.texture_descriptor.size;
-        material.base_color_texture = Some(images.add(photo.image));
-        // White, so the photo shows at its own colours rather than tinted by the blank screen.
-        material.base_color = Color::WHITE;
+        // The card takes the photograph's shape, which is what dropping the frame bought: a
+        // portrait photo gets a portrait card rather than bars down either side of a fixed one.
+        marker.aspect = size.width as f32 / size.height.max(1) as f32;
+        card::show_photo(marker.card, images.add(photo.image), &mut cards);
         marker.photo = Some(task.path.clone());
         marker.missing = false;
         markers.dirty = true;
@@ -171,20 +165,23 @@ pub(super) fn poll_photos(
     }
 }
 
-/// Brightens the selected marker's screen while a file hovers the window, and puts it back when
-/// the drag leaves or lands. Only a screen with no photo on it is tinted: one already showing a
-/// photo would have its picture discoloured, and the brightening is to say which marker is aimed
-/// at, not to preview anything.
+/// Washes the selected marker's card while a file hovers the window, and puts it back when the
+/// drag leaves or lands. Only a card with no photo on it: one already showing a photograph would
+/// have its colours shifted, and the wash is to say which marker is aimed at, not to preview.
+///
+/// A card with no photo is cream, so this cannot be a brightening the way it was on the dark
+/// screen quad. It is the background that is washed rather than the image, since on an empty
+/// card the image is the transparent one the renderer skips.
 pub(super) fn tint_on_hover(
     mut drops: MessageReader<FileDragAndDrop>,
     markers: Res<PhotoMarkers>,
-    mut materials: ResMut<Assets<StandardMaterial>>,
+    mut cards: Query<&mut BackgroundColor, With<MarkerCard>>,
 ) {
     for drop in drops.read() {
         let tint = match drop {
-            FileDragAndDrop::HoveredFile { .. } => HOVER_TINT,
+            FileDragAndDrop::HoveredFile { .. } => Some(HOVER_TINT),
             FileDragAndDrop::HoveredFileCanceled { .. } | FileDragAndDrop::DroppedFile { .. } => {
-                BLANK_SCREEN
+                None
             }
         };
 
@@ -194,31 +191,24 @@ pub(super) fn tint_on_hover(
         if marker.photo.is_some() {
             continue;
         }
-        let Some(handle) = &marker.screen_material else {
+        let Some(mut background) = marker.card.and_then(|card| cards.get_mut(card).ok()) else {
             continue;
         };
-        let Some(mut material) = materials.get_mut(handle) else {
-            continue;
-        };
-        material.base_color = tint;
+        background.0 = tint.unwrap_or(card::EMPTY_CARD);
     }
 }
 
-/// Takes the photo off a marker's screen and leaves it blank again.
+/// Forgets the photo on a marker: the path, the complaint about it, and the shape the card took
+/// from it. Taking the picture off the card itself is card::clear_card, kept apart so that this
+/// much is a plain edit of the marker and can be tested without a world to hold a node.
 pub(super) fn clear_photo(
     marker_photo: &mut Option<PathBuf>,
     missing: &mut bool,
-    handle: Option<&Handle<StandardMaterial>>,
-    materials: &mut Assets<StandardMaterial>,
+    aspect: &mut f32,
 ) {
     *marker_photo = None;
     *missing = false;
-
-    let Some(mut material) = handle.and_then(|handle| materials.get_mut(handle)) else {
-        return;
-    };
-    material.base_color_texture = None;
-    material.base_color = BLANK_SCREEN;
+    *aspect = card::EMPTY_ASPECT;
 }
 
 /// The file's name, for a message. Dropped paths come from outside, so only the name is shown and
@@ -278,47 +268,30 @@ pub(super) fn decode_photo(path: &Path) -> Result<Photo, String> {
 
     let source = UVec2::new(photo.width(), photo.height());
 
-    // Shrunk before the letterbox, so the canvas is built from no more pixels than it needs.
     if source.x.max(source.y) > MAX_PHOTO_EDGE {
         photo = photo.resize(MAX_PHOTO_EDGE, MAX_PHOTO_EDGE, FilterType::CatmullRom);
     }
 
     Ok(Photo {
-        image: canvas(&photo.to_rgba8()),
+        image: texture(&photo.to_rgba8()),
         source,
     })
 }
 
-/// The photo centred on a canvas of the screen's shape, padded with bars where it does not reach.
-/// Nothing is cropped and nothing is stretched: a wide photo gets bars above and below, a tall
-/// one bars to either side, and one already the screen's shape gets none.
-fn canvas(photo: &image::RgbaImage) -> Image {
-    let (width, height) = (photo.width(), photo.height());
-    let (canvas_width, canvas_height) = canvas_size(UVec2::new(width, height));
-
-    let mut pixels = LETTERBOX.repeat((canvas_width * canvas_height) as usize);
-    let left = (canvas_width - width) / 2;
-    let top = (canvas_height - height) / 2;
-
-    for y in 0..height {
-        let row = ((top + y) * canvas_width + left) as usize * 4;
-        let source = (y * width) as usize * 4;
-        let length = width as usize * 4;
-        pixels[row..row + length].copy_from_slice(&photo.as_raw()[source..source + length]);
-    }
-
+/// The decoded photograph as a texture, at its own size and proportions.
+fn texture(photo: &image::RgbaImage) -> Image {
     let mut image = Image::new(
         Extent3d {
-            width: canvas_width,
-            height: canvas_height,
+            width: photo.width(),
+            height: photo.height(),
             depth_or_array_layers: 1,
         },
         TextureDimension::D2,
-        pixels,
+        photo.as_raw().clone(),
         // A photo is sRGB encoded, which the shader has to be told or it comes out washed out.
         TextureFormat::Rgba8UnormSrgb,
-        // The main world keeps no copy: the screen is the only thing that reads it, and the
-        // photo on disk is where it came from if it is ever wanted again.
+        // The main world keeps no copy: the card is the only thing that reads it, and the photo
+        // on disk is where it came from if it is ever wanted again.
         RenderAssetUsages::RENDER_WORLD,
     );
     // The default sampler takes the nearest pixel, which at anything but exactly one texel to the
@@ -326,21 +299,4 @@ fn canvas(photo: &image::RgbaImage) -> Image {
     image.sampler = ImageSampler::linear();
 
     image
-}
-
-/// The canvas a photo of this size is centred on: the screen's shape, no smaller than the photo
-/// in either direction, so that nothing is lost. Pure, and the one piece worth a test.
-pub(super) fn canvas_size(photo: UVec2) -> (u32, u32) {
-    let photo = photo.max(UVec2::ONE);
-    let wanted = (photo.x as f32 / photo.y as f32) / SCREEN_ASPECT;
-
-    if wanted >= 1.0 {
-        // Wider than the screen: keep the width and grow the height, bars above and below.
-        let height = (photo.x as f32 / SCREEN_ASPECT).round() as u32;
-        (photo.x, height.max(photo.y))
-    } else {
-        // Taller: keep the height and grow the width, bars to either side.
-        let width = (photo.y as f32 * SCREEN_ASPECT).round() as u32;
-        (width.max(photo.x), photo.y)
-    }
 }
