@@ -12,6 +12,7 @@
 
 use bevy::prelude::*;
 use bevy_terrain::math::unit_position;
+use bevy_terrain::prelude::TerrainShape;
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 
@@ -73,6 +74,11 @@ impl SavedMarker {
             // Whether the file is still there is found out by trying to read it, see
             // spawn_markers, not by anything the saved file could have said.
             missing: false,
+            // A marker is written down where it last was, riding or not: an entity means
+            // nothing in a new run, and the trains it could have ridden are not there yet.
+            riding: None,
+            at: TerrainShape::WGS84
+                .position_unit_to_local(unit_position(self.longitude, self.latitude), self.ground),
             entity: None,
             body_material: None,
             screen_material: None,

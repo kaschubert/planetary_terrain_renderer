@@ -839,28 +839,33 @@ fn style_sliders(
 fn update_readout(markers: Res<PhotoMarkers>, mut readout: Single<&mut Text, With<Readout>>) {
     let text = readout_text(markers.selected, markers.markers.len());
     let text = match markers.selected() {
+        Some(marker) if marker.riding.is_some() => {
+            format!("{text}  riding a train  {}", photo_text(marker))
+        }
         Some(marker) => format!(
             "{text}  {:.5}, {:.5}  ground {:.0} m  {}",
             marker.latitude(),
             marker.longitude(),
             marker.ground,
-            match (&marker.photo, marker.missing) {
-                // Named either way, so that a photo whose file has moved can be put back rather
-                // than guessed at. The path is kept on the marker and saved with it.
-                (Some(path), true) => format!(
-                    "{} is missing",
-                    ascii(&path.file_name().unwrap_or_default().to_string_lossy())
-                ),
-                (Some(path), false) => {
-                    ascii(&path.file_name().unwrap_or_default().to_string_lossy())
-                }
-                (None, _) => "no photo".to_string(),
-            }
+            photo_text(marker)
         ),
         None => text,
     };
 
     readout.set_if_neq(Text::new(text));
+}
+
+/// What the readout says about a marker's photo. Named either way, so that one whose file has
+/// moved can be put back rather than guessed at: the path is kept on the marker and saved with it.
+fn photo_text(marker: &super::PhotoMarker) -> String {
+    match (&marker.photo, marker.missing) {
+        (Some(path), true) => format!(
+            "{} is missing",
+            ascii(&path.file_name().unwrap_or_default().to_string_lossy())
+        ),
+        (Some(path), false) => ascii(&path.file_name().unwrap_or_default().to_string_lossy()),
+        (None, _) => "no photo".to_string(),
+    }
 }
 
 /// The first part of the readout: which marker of how many, or what to do when there is none.

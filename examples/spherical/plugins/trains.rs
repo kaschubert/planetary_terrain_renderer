@@ -70,8 +70,9 @@ const MODEL_SCALE: f32 = CARRIAGE_LENGTH / (MODEL_MAX.x - MODEL_MIN.x);
 /// lift puts its lowest point, the wheels, on the rail.
 const MODEL_LIFT: f32 = -MODEL_MIN.y * MODEL_SCALE;
 
-/// How tall the carriage stands above the rail, in metres, which is where its label sits.
-const CARRIAGE_HEIGHT: f32 = (MODEL_MAX.y - MODEL_MIN.y) * MODEL_SCALE;
+/// How tall the carriage stands above the rail, in metres, which is where its label sits, and
+/// where a photo marker riding the train floats from.
+pub const CARRIAGE_HEIGHT: f32 = (MODEL_MAX.y - MODEL_MIN.y) * MODEL_SCALE;
 
 /// The model, under the asset root. One carriage, one mesh, 8 MB, untracked in git.
 const MODEL_PATH: &str = "models/Meshy_AI_Auckland_Metro_Glide_0929051957_texture.glb";

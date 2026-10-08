@@ -33,9 +33,12 @@ use bevy_terrain::prelude::*;
 use big_space::prelude::{CellCoord, Grids};
 use std::path::PathBuf;
 
+use super::auckland_rail::AucklandRail;
 use super::rail_editor::clicks::ClickDetector;
 use super::rail_editor::frame::{Frame, unit_under};
 use super::sheet_grid::IN_FRONT_OF_TERRAIN;
+use super::track_frames::TrackSplines;
+use super::trains::{CARRIAGE_HEIGHT, CARRIAGE_LENGTH, Trains, carriage_frame};
 use model::{
     HOVER_HEIGHT, MARKER_HEIGHT, MARKER_MESH, MODEL_PATH, SCREEN_MESH, apparent_pixels,
     billboard_rotation, model_transform, pixel_floor_scale,
@@ -114,6 +117,16 @@ pub struct PhotoMarker {
     /// there is a fact about the disk now, not about the marker, and a drive plugged back in
     /// should not have to argue with the file about it.
     pub missing: bool,
+    /// The carriage this marker rides, when it was placed on a train rather than on the ground.
+    /// A train is named by its carriage entity, the way the chase camera follows one, because a
+    /// stand-in has no name of its own and the feed's trains come and go. Not saved: an entity
+    /// means nothing in the next run, so a riding marker is written down where it last rode.
+    pub riding: Option<Entity>,
+    /// Where the marker actually is this frame, which place_markers works out and writes. The
+    /// anchor alone cannot say, since a riding marker's place is wherever its train has got to;
+    /// everything that has to know where a marker is on screen reads this, as the rail lines'
+    /// resolved positions are read rather than their points.
+    pub at: DVec3,
     /// The holder entity, once spawned, and the two materials that are this marker's own.
     pub entity: Option<Entity>,
     pub body_material: Option<Handle<StandardMaterial>>,
@@ -121,8 +134,10 @@ pub struct PhotoMarker {
 }
 
 impl PhotoMarker {
-    /// Where the plate's base floats: the ground under the marker plus the hover height.
-    pub fn position(&self) -> DVec3 {
+    /// Where the plate's base floats when the marker is anchored to the ground: the terrain
+    /// under it plus the hover height. A marker riding a train is placed from the train
+    /// instead, see place_markers, and this is where it falls back to if the train goes.
+    pub fn anchor_position(&self) -> DVec3 {
         TerrainShape::WGS84.position_unit_to_local(self.unit, self.ground + HOVER_HEIGHT)
     }
 
@@ -171,20 +186,35 @@ pub struct PhotoMarkers {
 impl PhotoMarkers {
     /// A marker on the ground at a direction on the unit sphere, in the current colour,
     /// selected. The entity and the materials follow on the next frame, see spawn_markers.
+    #[cfg(test)]
     pub fn place(&mut self, unit: DVec3, ground: f64) -> MarkerId {
+        self.place_riding(unit, ground, None)
+    }
+
+    /// The same, riding a carriage: the marker stands over that train and goes where it goes,
+    /// and the ground given is where it falls back to should the train be gone.
+    pub fn place_riding(&mut self, unit: DVec3, ground: f64, riding: Option<Entity>) -> MarkerId {
         let id = MarkerId(self.next_id);
         self.next_id += 1;
 
-        self.markers.push(PhotoMarker {
+        let marker = PhotoMarker {
             id,
             unit,
             ground,
             colour: self.colour,
             photo: None,
             missing: false,
+            riding,
+            // Overwritten by place_markers on the next frame; set here so that a marker never
+            // reads as being at the centre of the earth in between.
+            at: DVec3::ZERO,
             entity: None,
             body_material: None,
             screen_material: None,
+        };
+        self.markers.push(PhotoMarker {
+            at: marker.anchor_position(),
+            ..marker
         });
         self.selected = Some(self.markers.len() - 1);
         self.dirty = true;
@@ -214,7 +244,7 @@ impl PhotoMarkers {
         camera_position: DVec3,
         focal_pixels: Option<f32>,
     ) -> f32 {
-        let distance = camera_position.distance(marker.position());
+        let distance = camera_position.distance(marker.at);
         let floor = focal_pixels
             .map(|focal| pixel_floor_scale(self.height, distance, focal, self.min_pixels))
             .unwrap_or(1.0);
@@ -486,9 +516,12 @@ fn spawn_markers(
 ///
 /// Along the way it notes how the selected marker stands on screen, which is what the panel reads
 /// out and what its sample button writes down.
+#[allow(clippy::too_many_arguments)]
 fn place_markers(
-    markers: Res<PhotoMarkers>,
+    mut markers: ResMut<PhotoMarkers>,
     mut view_sample: ResMut<MarkerView>,
+    trains: Res<Trains>,
+    splines: Res<TrackSplines>,
     grids: Grids,
     camera: Query<MarkerCamera, With<OrbitalCameraController>>,
     mut holders: MarkerHolders,
@@ -525,6 +558,21 @@ fn place_markers(
     let selected = markers.selected;
     let mut sample = None;
 
+    // Where every marker is this frame, worked out before the loop writes anything, so that the
+    // borrow of the markers ends before they are written back. A marker riding a train stands
+    // over the carriage's roof wherever it has got to; one that has lost its train, because the
+    // feed dropped it or F8 swapped the roster, falls back to the ground it was placed over.
+    let positions: Vec<DVec3> = markers
+        .markers
+        .iter()
+        .map(|marker| {
+            marker
+                .riding
+                .and_then(|carriage| riding_position(carriage, &trains, &splines))
+                .unwrap_or_else(|| marker.anchor_position())
+        })
+        .collect();
+
     for (index, marker) in markers.markers.iter().enumerate() {
         let Some(entity) = marker.entity else {
             continue;
@@ -533,7 +581,7 @@ fn place_markers(
             continue;
         };
 
-        let position = marker.position();
+        let position = positions[index];
         let distance = camera_position.distance(position);
         let frame = Frame::at_unit(marker.unit);
         let rotation = billboard_rotation(frame.up, camera_position - position);
@@ -571,6 +619,29 @@ fn place_markers(
     // the camera moves, so writing it there would mark the markers edited every frame and the
     // systems that watch them for a real change would all run for nothing.
     view_sample.0 = sample;
+
+    // And the places back onto the markers, for the mouse and the ring, which run after this and
+    // would otherwise each have to work out a riding marker's position for themselves. Written
+    // through bypass_change_detection for the same reason the sample is kept out: a riding
+    // marker moves every frame, and the panel would rebuild itself every frame with it.
+    let markers = markers.bypass_change_detection();
+    for (marker, position) in markers.markers.iter_mut().zip(positions) {
+        marker.at = position;
+    }
+}
+
+/// Where a marker riding a carriage stands: over the roof of the train whose carriage that is,
+/// by the same hover a marker on the ground keeps over the terrain. None when the train has
+/// gone, or when its line has no spline this frame, as on the frame after an edit.
+fn riding_position(carriage: Entity, trains: &Trains, splines: &TrackSplines) -> Option<DVec3> {
+    let train = trains
+        .trains
+        .iter()
+        .find(|train| train.entity == Some(carriage))?;
+    let spline = splines.splines.get(train.line).and_then(Option::as_ref)?;
+    let frame = carriage_frame(spline, train);
+
+    Some(frame.position + frame.up() * (CARRIAGE_HEIGHT as f64 + HOVER_HEIGHT))
 }
 
 /// Ctrl+click on the terrain places a marker, a plain click selects one, Delete removes the
@@ -586,6 +657,9 @@ fn place_markers(
 fn edit_with_mouse(
     mut commands: Commands,
     mut markers: ResMut<PhotoMarkers>,
+    trains: Res<Trains>,
+    splines: Res<TrackSplines>,
+    rail: Res<AucklandRail>,
     buttons: Res<ButtonInput<MouseButton>>,
     keys: Res<ButtonInput<KeyCode>>,
     capture: Res<PointerCapture>,
@@ -673,29 +747,124 @@ fn edit_with_mouse(
         return;
     }
 
-    // The hit is in render space relative to the cell the readback was taken in, which is not
-    // always the camera's current one, so it is that cell the position is resolved against.
-    let Some(translation) = camera.picking.translation else {
-        return;
+    // A train under the cursor takes the marker instead of the ground does, and it rides from
+    // then on. Tested on screen rather than by the pick, which reads the terrain's own depth
+    // and so sees straight through a carriage to the ground behind it.
+    let cell_origin = grid.cell_to_float(camera.cell);
+    let camera_position = grid.grid_position_double(camera.cell, camera.transform);
+    let riding = trains.drawn(&rail).then(|| {
+        nearest_carriage(
+            &trains,
+            &splines,
+            camera.camera,
+            camera.global,
+            cell_origin,
+            camera_position,
+            click.position(),
+        )
+    });
+
+    // Where the marker goes, and what it falls back to if it is riding and loses its train: the
+    // carriage's own place for a train, and the terrain under the cursor otherwise.
+    let anchor = match riding.flatten() {
+        Some((_, position)) => position,
+        None => {
+            // The hit is in render space relative to the cell the readback was taken in, which
+            // is not always the camera's current one, so it is that cell it is resolved against.
+            let Some(translation) = camera.picking.translation else {
+                return;
+            };
+            grid.grid_position_double(
+                &camera.picking.cell,
+                &Transform::from_translation(translation),
+            )
+        }
     };
-    let hit = grid.grid_position_double(
-        &camera.picking.cell,
-        &Transform::from_translation(translation),
-    );
 
-    // The height the hit stands at above the ellipsoid, along the direction heights run in, so
-    // that position() puts the marker back exactly here plus the hover.
-    let unit = unit_under(hit);
-    let ground = (hit - TerrainShape::WGS84.scale() * unit).dot(Frame::at_unit(unit).up);
+    // The height the anchor stands at above the ellipsoid, along the direction heights run in,
+    // so that anchor_position puts the marker back exactly there plus the hover.
+    let unit = unit_under(anchor);
+    let ground = (anchor - TerrainShape::WGS84.scale() * unit).dot(Frame::at_unit(unit).up);
 
-    markers.place(unit, ground);
+    markers.place_riding(unit, ground, riding.flatten().map(|(carriage, _)| carriage));
     let marker = markers.markers.last().expect("just placed");
-    info!(
-        "photo markers: placed at {:.5}, {:.5}, ground {:.1} m",
-        marker.latitude(),
-        marker.longitude(),
-        marker.ground,
-    );
+    match riding.flatten() {
+        Some((carriage, _)) => {
+            let train = trains
+                .trains
+                .iter()
+                .find(|train| train.entity == Some(carriage));
+            info!(
+                "photo markers: riding the {} {}, and going where it goes",
+                train.map_or("", |train| train.line_name(&rail)),
+                train.map_or("train", |train| match train.id.is_empty() {
+                    true => "stand-in",
+                    false => train.id.as_str(),
+                }),
+            );
+        }
+        None => info!(
+            "photo markers: placed at {:.5}, {:.5}, ground {:.1} m",
+            marker.latitude(),
+            marker.longitude(),
+            marker.ground,
+        ),
+    }
+}
+
+/// The carriage nearest the cursor on screen and where it stands, if the cursor is on one. The
+/// reach is half the carriage's own length on screen, so a train filling the view can be hit
+/// anywhere along it and a distant one still takes a deliberate click.
+#[allow(clippy::too_many_arguments)]
+fn nearest_carriage(
+    trains: &Trains,
+    splines: &TrackSplines,
+    camera: &Camera,
+    camera_global: &GlobalTransform,
+    cell_origin: DVec3,
+    camera_position: DVec3,
+    cursor: Vec2,
+) -> Option<(Entity, DVec3)> {
+    let mut nearest: Option<(Entity, DVec3, f32)> = None;
+
+    for train in &trains.trains {
+        let Some(carriage) = train.entity else {
+            continue;
+        };
+        let Some(spline) = splines.splines.get(train.line).and_then(Option::as_ref) else {
+            continue;
+        };
+
+        let frame = carriage_frame(spline, train);
+        // The middle of the carriage's side, which is what a click at a train aims at.
+        let middle = frame.position + frame.up() * (CARRIAGE_HEIGHT as f64 / 2.0);
+        let Ok(on_screen) =
+            camera.world_to_viewport(camera_global, (middle - cell_origin).as_vec3())
+        else {
+            continue;
+        };
+
+        // Over the horizon the planet hides the carriage, though it still projects onto the
+        // screen; the labels test their roof the same way.
+        if (camera_position - middle).dot(middle) < 0.0 {
+            continue;
+        }
+
+        let Ok(nose) = camera.world_to_viewport(
+            camera_global,
+            (middle + frame.forward() * (CARRIAGE_LENGTH as f64 / 2.0) - cell_origin).as_vec3(),
+        ) else {
+            continue;
+        };
+
+        let reach = PICK_PIXELS.max(on_screen.distance(nose));
+        let distance = on_screen.distance(cursor);
+        if distance <= reach && nearest.is_none_or(|(_, _, best)| distance < best) {
+            nearest = Some((carriage, frame.position, distance));
+        }
+    }
+
+    nearest.map(|(carriage, position, _)| (carriage, position))
 }
 
 /// Where a marker's middle falls on screen and how far from it a click still counts, in pixels.
@@ -712,7 +881,7 @@ fn marker_on_screen(
     camera_global: &GlobalTransform,
     cell_origin: DVec3,
 ) -> Option<(Vec2, f32)> {
-    let position = marker.position();
+    let position = marker.at;
     let up = Frame::at_unit(marker.unit).up;
     let centre = position + up * (drawn_height as f64 / 2.0);
 
@@ -787,7 +956,7 @@ fn ring_selection(
     };
 
     let drawn_height = markers.drawn_height(marker, camera_position, focal_pixels);
-    let position = marker.position();
+    let position = marker.at;
     let up = Frame::at_unit(marker.unit).up;
     let centre = position + up * (drawn_height as f64 / 2.0);
     // Wide enough to sit clear of the plate, which is about three quarters as wide as it is tall.

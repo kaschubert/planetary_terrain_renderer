@@ -85,13 +85,15 @@ fn a_marker_floats_the_hover_height_over_its_ground() {
         colour: DEFAULT_COLOUR,
         photo: None,
         missing: false,
+        riding: None,
+        at: DVec3::ZERO,
         entity: None,
         body_material: None,
         screen_material: None,
     };
 
     let ground = TerrainShape::WGS84.position_unit_to_local(unit, 41.0);
-    let floated = marker.position();
+    let floated = marker.anchor_position();
 
     // Exactly the hover height further out, along the direction heights run in.
     let up = Frame::at_unit(unit).up;
@@ -108,6 +110,8 @@ fn a_markers_longitude_and_latitude_come_back_out_of_its_direction() {
         colour: DEFAULT_COLOUR,
         photo: None,
         missing: false,
+        riding: None,
+        at: DVec3::ZERO,
         entity: None,
         body_material: None,
         screen_material: None,
@@ -454,7 +458,7 @@ fn the_clickable_size_follows_the_size_slider() {
 
     // A kilometre out, straight along the east so the marker is seen side on and not
     // foreshortened, which is where its height on screen is its full height.
-    let camera_position = marker.position() + Frame::at_unit(marker.unit).east * 1000.0;
+    let camera_position = marker.anchor_position() + Frame::at_unit(marker.unit).east * 1000.0;
 
     let small = markers.drawn_height(marker, camera_position, Some(1303.6));
     markers.height = 200.0;
@@ -475,7 +479,7 @@ fn the_pixel_floor_counts_towards_the_clickable_size() {
     };
     markers.place(auckland(), 0.0);
     let marker = &markers.markers[0];
-    let camera_position = marker.position() + Frame::at_unit(marker.unit).east * 10_000.0;
+    let camera_position = marker.anchor_position() + Frame::at_unit(marker.unit).east * 10_000.0;
 
     let drawn = markers.drawn_height(marker, camera_position, Some(1303.6));
 
@@ -539,4 +543,48 @@ fn clearing_a_photo_forgets_the_path_and_the_complaint_with_it() {
     let marker = markers.selected().expect("still selected");
     assert_eq!(marker.photo, None);
     assert!(!marker.missing);
+}
+
+#[test]
+fn a_marker_placed_on_a_train_rides_it_and_knows_where_to_fall_back_to() {
+    let mut markers = PhotoMarkers::default();
+    let carriage = Entity::from_raw_u32(7).expect("a plain entity for the test");
+
+    markers.place_riding(auckland(), 12.0, Some(carriage));
+    let marker = markers.selected().expect("just placed");
+
+    assert_eq!(marker.riding, Some(carriage));
+    // The ground it was placed over is kept, so losing the train leaves it somewhere sensible
+    // rather than at the centre of the earth.
+    assert_eq!(marker.ground, 12.0);
+    assert_eq!(marker.at, marker.anchor_position());
+}
+
+#[test]
+fn a_marker_placed_on_the_ground_rides_nothing() {
+    let mut markers = PhotoMarkers::default();
+    markers.place(auckland(), 12.0);
+
+    assert_eq!(markers.selected().expect("just placed").riding, None);
+}
+
+#[test]
+fn riding_a_train_is_not_written_to_the_file() {
+    // An entity means nothing in the next run, and the trains a marker could ride are not there
+    // when the file is read, so a riding marker is written down where it last rode and comes
+    // back standing on the ground there.
+    let mut markers = PhotoMarkers::default();
+    let carriage = Entity::from_raw_u32(7).expect("a plain entity for the test");
+    markers.place_riding(auckland(), 12.0, Some(carriage));
+
+    let text = to_ron(&markers.markers, "2026-10-08 09:12 UTC").expect("serialises");
+    let path = std::env::temp_dir().join("photo-markers-test-riding.ron");
+    std::fs::write(&path, &text).expect("the temporary file is writable");
+    let (loaded, unreadable) = load_markers(&path);
+    std::fs::remove_file(&path).ok();
+
+    assert!(!unreadable);
+    assert_eq!(loaded.len(), 1);
+    assert_eq!(loaded[0].riding, None, "it should come back on the ground");
+    assert_eq!(loaded[0].ground, 12.0, "where it last rode");
 }
