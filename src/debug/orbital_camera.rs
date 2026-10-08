@@ -71,6 +71,13 @@ pub struct RotationData {
     target_rotation: DVec2,
     rotation: DVec2,
     initial_tilt: f64,
+    /// How much nearer or further the camera has been wheeled since the rotation began, in
+    /// doublings of its distance from the anchor, and what it is easing towards. The wheel feeds
+    /// these rather than the zoom while the right button is held: a zoom of its own re-anchors
+    /// the camera, and re-anchoring under a rotation that is reading the old anchor is what used
+    /// to throw the view across the map at every notch.
+    zoom: f64,
+    target_zoom: f64,
 }
 
 #[derive(Clone, Debug, Component)]
@@ -162,7 +169,24 @@ pub fn orbital_camera_controller(
 
     let mut update_cursor_coords = true;
 
-    if mouse_buttons.pressed(MouseButton::Left) {
+    // Read every frame, before anything that might want them, so notches do not pile up while
+    // something else has the wheel.
+    let notches: f64 = wheel
+        .read()
+        .map(|scroll| match scroll.unit {
+            MouseScrollUnit::Line => scroll.y as f64,
+            // A touchpad reports pixels; a line is about twenty of them.
+            MouseScrollUnit::Pixel => scroll.y as f64 / 20.0,
+        })
+        .sum();
+
+    // Control hands the left button to the app: a Ctrl+click is a chord of its own, as Ctrl+S and
+    // Ctrl+Z are of the keys, so the camera leaves the button alone while it is held rather than
+    // panning under the click. The same standing aside the letter toggles do, see toggle_debug.
+    // Nothing claims Control with the other two buttons, so those run as ever.
+    let chord = keyboard.pressed(KeyCode::ControlLeft) || keyboard.pressed(KeyCode::ControlRight);
+
+    if mouse_buttons.pressed(MouseButton::Left) && !chord {
         if controller.pan_data.is_none() && cursor_position.is_some() && !capture.blocks_pointer() {
             controller.anchor_position = cursor_position.unwrap();
             controller.anchor_cell = cursor_cell;
@@ -195,10 +219,15 @@ pub fn orbital_camera_controller(
                 rotation: DVec2::ZERO,
                 initial_tilt: (controller.anchor_position - terrain_origin)
                     .angle_between(controller.camera_position - controller.anchor_position),
+                zoom: 0.0,
+                target_zoom: 0.0,
             });
         } else {
             update_cursor_coords = false;
         }
+
+        // Read before the borrow below, which holds the controller for the whole block.
+        let wheel_reaches = controller.wheel_zooms && !capture.blocks_pointer();
 
         if let Some(data) = controller.rotation_data.as_mut() {
             // The camera goes the way the mouse drags: right takes it round to the right of
@@ -213,25 +242,33 @@ pub fn orbital_camera_controller(
             );
 
             data.rotation = data.rotation.lerp(data.target_rotation, smoothing);
+
+            // And the wheel draws the camera along its orbit rather than starting a zoom of its
+            // own, which would re-anchor the camera the rotation is turning about.
+            if wheel_reaches {
+                data.target_zoom -= notches * ZOOM_PER_NOTCH;
+                // Bounded so that a spun wheel cannot put the camera inside the anchor or out
+                // past the planet: ten doublings either way is a factor of a thousand.
+                data.target_zoom = data.target_zoom.clamp(-10.0, 10.0);
+            }
+            data.zoom = data.zoom.lerp(data.target_zoom, smoothing);
         }
     } else {
         controller.rotation_data = None;
     }
 
-    // The wheel zooms as the middle button does, towards the point under the cursor. It is
-    // read every frame, so notches do not pile up while something else has the wheel.
-    let notches: f64 = wheel
-        .read()
-        .map(|scroll| match scroll.unit {
-            MouseScrollUnit::Line => scroll.y as f64,
-            // A touchpad reports pixels; a line is about twenty of them.
-            MouseScrollUnit::Pixel => scroll.y as f64 / 20.0,
-        })
-        .sum();
     let dragging_zoom = mouse_buttons.pressed(MouseButton::Middle);
-    let wheeling = controller.wheel_zooms && notches != 0.0 && !capture.blocks_pointer();
+    // The wheel zooms as the middle button does, towards the point under the cursor, unless a
+    // rotation has already taken the notches, in which case it has drawn the camera in or out
+    // along its orbit and there is nothing left for the zoom to do.
+    let wheeling = controller.wheel_zooms
+        && notches != 0.0
+        && !capture.blocks_pointer()
+        && controller.rotation_data.is_none();
 
-    if dragging_zoom || wheeling {
+    // A rotation owns the mouse while it runs, the delta as well as the notches, so the middle
+    // button cannot zoom under it either: both read the same drag, and the two would fight.
+    if (dragging_zoom || wheeling) && controller.rotation_data.is_none() {
         if controller.zoom_data.is_none() && cursor_position.is_some() && !capture.blocks_pointer()
         {
             controller.anchor_position = cursor_position.unwrap();
@@ -259,9 +296,11 @@ pub fn orbital_camera_controller(
             data.target_zoom -= notches * ZOOM_PER_NOTCH;
             data.zoom = data.zoom.lerp(data.target_zoom, smoothing);
         }
-    } else if mouse_buttons.pressed(MouseButton::Left) || mouse_buttons.pressed(MouseButton::Right)
+    } else if (mouse_buttons.pressed(MouseButton::Left) && !chord)
+        || mouse_buttons.pressed(MouseButton::Right)
     {
-        // A pan or a rotate starting takes over from a wheel zoom still easing in.
+        // A pan or a rotate starting takes over from a wheel zoom still easing in. A held
+        // Control starts no pan, see above, so it does not cut an easing zoom short either.
         controller.zoom_data = None;
     } else if let Some(data) = controller
         .zoom_data
@@ -354,8 +393,13 @@ pub fn orbital_camera_controller(
         let rotation_tilt = DQuat::from_axis_angle(tilt_axis, rotation_data.rotation.y);
         let rotation = rotation_heading * rotation_tilt;
 
-        new_camera_position = controller.anchor_position
-            + rotation * (controller.camera_position - controller.anchor_position);
+        // The orbit's radius is the one it began with, drawn in or out by whatever the wheel has
+        // said since. Keeping it off the shared anchor is what makes a notch mid-rotation a zoom
+        // rather than a jump: nothing the wheel does moves what the camera is turning about.
+        let reach = (controller.camera_position - controller.anchor_position)
+            * 2.0_f64.powf(rotation_data.zoom);
+
+        new_camera_position = controller.anchor_position + rotation * reach;
         new_camera_rotation = rotation * controller.camera_rotation;
     }
 

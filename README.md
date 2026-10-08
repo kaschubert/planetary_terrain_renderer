@@ -77,6 +77,7 @@ using only the mouse.
 - Hold the left mouse button to pan the camera
 - Hold the right mouse button to rotate the camera: it goes the way you drag, right round to the right of the point under the cursor and up to look down on it
 - Hold the middle mouse button and drag down to zoom out or up to zoom in, or turn the mouse wheel; both zoom towards the point under the cursor
+- Turn the wheel while the right button is held to draw in and out along the orbit, keeping the point you are turning about where it is
 
 ### Visualization Toggles
 
@@ -100,7 +101,8 @@ using only the mouse.
 - `G` - toggle texture sampling using gradients
 - `H` - toggle high precision coordinates
 - `F` - toggle freeze view frustum
-- Hold `Ctrl` - detach the culling camera: the terrain keeps loading and culling for the pose you had, while you fly off to look at it from outside; the letter toggles stand aside while it is held, so Ctrl+S, Ctrl+Z and Ctrl+Y reach the rail editor, at the cost of two lines on the console per chord
+- Hold `C` - detach the culling camera: the terrain keeps loading and culling for the pose you had, while you fly off to look at it from outside
+- Hold `Ctrl` - stand aside, so the example's chords get through: the letter toggles do not fire, so Ctrl+S, Ctrl+Z and Ctrl+Y reach the rail editor, and the left button does not pan, so a Ctrl+click is a click and not a drag
 - `D` - toggle surface approximation debug
 
 ### Rail Editor
@@ -134,6 +136,21 @@ One carriage per line drives itself along the drawn track, end to end and back a
 - Drag with the left or right button while following - orbit the camera round the train, right to go round its right and up to look down on it
 - Mouse wheel, or drag with the middle button, while following - zoom in and out, no nearer than 20 m and as far as you like
 
+### Photo Markers
+
+A marker from `assets/models/marker.glb` stands over the terrain wherever you Ctrl+click it: a plate in a colour you pick, floating 10 m above the ground on the ellipsoid's up, with a screen set into its front that a photo dropped on the window goes onto. It turns about its own up every frame so the screen faces the camera, and is drawn 130 m tall, which is what looked right by eye from a kilometre up: a marker is a label on the landscape rather than a thing standing in it. Control is what makes the click safe: the camera pans on the same button and would otherwise drag the view out from under the press. The terrain pick is of the terrain alone, so a Ctrl+click through a marker places on the ground behind it rather than on the marker, and a carriage is tested for on screen rather than by the pick, which sees straight through one. A marker put on a train rides over its roof for as long as the train is there; riding is not saved, since a train is named by its carriage and that means nothing in the next run, so a riding marker is written down where it last rode. A dropped photo goes to the selected marker and not to the screen under the pointer, which cannot be known: the drop carries no cursor position, so while a file hovers the window the selected screen brightens to say where it would land. Only png and jpeg decode in this build; a phone's orientation tag is honoured and anything longer than 2048 px is shrunk before it goes to the GPU. The panel in the bottom right corner reads out the marker selected, its place and its photo, and holds the colour: hue, saturation and value on sliders with a gradient under each track, a swatch with the hex code, and eight presets with the default very light grey first. The markers are saved to `examples/spherical/plugins/photo_markers/markers.ron`, each with the path of the photo on it, and come back next run with their pictures: the files are read again as the markers are spawned. One whose file has moved comes back blank and says which photo is missing in the readout, keeping the path, so putting the file back and starting again is all it takes. A marker is drawn 130 m tall and never smaller than 100 px on screen, so beyond about 1.7 km it is the pixels that decide and nearer than that the metres. Both are sliders on the panel, and `note size` appends what they are on, how far the camera is and how many pixels the marker covers to `examples/spherical/plugins/photo_markers/marker_sizes.csv`, which is where those two numbers came from.
+
+- `F10` - toggle the photo markers panel, which turns the rail editor off as F5 turns this off: both want the corner, `Delete` and `Escape`
+- `Ctrl`+click the terrain - place a marker 10 m over the ground there, in the panel's colour, and select it; it works whether the panel is open or not
+- `Ctrl`+click a train - put the marker on that carriage instead: it rides over the roof and goes where the train goes, and falls back to the ground it was placed over if the train is gone
+- `Click` a marker - select it, with or without the panel open, so a photo can be dropped on it; a white ring says which one is selected, and the readout and the colour controls take its colour and photo
+- Drop a `.png` or `.jpg` on the window - put it on the selected marker's screen, letterboxed so the whole photo shows
+- `Delete` - remove the selected marker, while the panel is open; `Escape` - clear the selection
+- `hue` / `saturation` / `value` - the selected marker's colour, or the colour the next marker takes while none is selected
+- `size` - how tall every marker is drawn, 2 to 400 m and 130 m to begin with, judged against the line above the sliders saying how many pixels the selected one covers and how far off it is
+- `floor` - the smallest a marker is ever drawn on screen, in pixels, so a distant one stays findable the way a map pin does; 100 px to begin with, which past about 1.7 km is what decides a marker's size rather than the metres above
+- `note size` / `clear photo` / `remove` / `save` - write the size and the view to marker_sizes.csv, take the photo off the screen, remove the marker, write the markers to their file
+
 ### Quality Adjustments
 
 - `N` - decrease blend distance
@@ -147,6 +164,8 @@ One carriage per line drives itself along the drawn track, end to end and back a
 
 When enabling the `metal_capture` feature, you can trigger a GPU frame capture using the `C` key.
 Recorded captures are stored in the `captures` directory of the project.
+Note that `C` also detaches the culling camera, so with this feature on the two share the key; the
+feature is macOS only, and the culling camera's key is one line in `src/debug/mod.rs` to change.
 They can be examined and analyzed using Xcode.
 
 ## Attribution

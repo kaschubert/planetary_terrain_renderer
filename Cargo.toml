@@ -50,7 +50,7 @@ wgpu-core = { version = "29", optional = true } # keep in sync with bevy's wgpu
 # Only the examples need these, so they are not forced on users of the library. Cargo
 # unifies the features into the bevy above when building examples. The dev tools are for
 # the fps overlay; jpeg is for the carriage model's textures, examples/spherical/plugins/trains.rs,
-# which Bevy's default image formats leave out.
+# and for the photos dropped on the markers, which Bevy's default image formats leave out.
 bevy = { version = "0.19.1", features = ["bevy_dev_tools", "jpeg"] }
 # For the overlay's copy button.
 arboard = "3.6"
@@ -64,6 +64,12 @@ transform-gizmo-bevy = "0.11"
 ureq = "3.4"
 serde = { version = "1.0.210", features = ["derive"] }
 serde_json = "1"
+# The photos dropped onto the markers, examples/spherical/plugins/photo_markers/photo.rs. Bevy
+# can decode an image already, but not turn a phone's EXIF orientation into the pixels nor
+# shrink a 24 megapixel one before it goes to the GPU, which this does. It is the same copy
+# bevy_image builds, with the codecs the jpeg feature above and bevy's own defaults turn on, so
+# nothing new is compiled.
+image = { version = "0.25", default-features = false }
 
 [[example]]
 name = "spherical"
