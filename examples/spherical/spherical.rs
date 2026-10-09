@@ -164,13 +164,13 @@ fn main() {
         // A terrain costs roughly 2.6 MiB per atlas slot, for height and albedo together,
         // and the atlas is allocated whole however few slots are in use. With loading
         // culled to the view frustum the resident terrains hold about a hundred slots
-        // each, against 1028 at the default size, so 256 leaves better than twice that in
-        // hand for the burst a fast turn requests before released slots cycle back. Three
-        // are resident at once at most - the globe, the country and a city - which is
-        // about 2.0 GiB. Running out no longer panics either: the
-        // finest tiles just go missing until the tree re-requests them, with a warning.
+        // each, against 1028 at the default size, but 256 still ran out, so 384 leaves
+        // more room for the burst a fast turn requests before released slots cycle back.
+        // Three are resident at once at most - the globe, the country and a city - which
+        // is about 2.9 GiB. Running out no longer panics either: the finest tiles just go
+        // missing until the tree re-requests them, with a warning.
         .insert_resource(TerrainSettings {
-            atlas_size: 256,
+            atlas_size: 384,
             ..TerrainSettings::new(vec!["albedo"])
         })
         // .insert_resource(ClearColor(Color::WHITE))
@@ -281,6 +281,14 @@ fn initialize(
     let camera_direction = (north - up).normalize();
 
     commands.spawn_big_space(Grid::default(), |root| {
+        // big_space is built without its camera feature, so the root bundle leaves out the
+        // Visibility it would otherwise carry, and every child that has one warns B0004:
+        // the chain visibility inherits along has no start. Inherited visibility falls back
+        // to visible when the parent has none, so nothing was hidden by it, but hiding the
+        // whole space by hiding its root would not have worked. Visibility requires
+        // InheritedVisibility and ViewVisibility, so this one insert gives the root all three.
+        root.insert(Visibility::default());
+
         view = root
             .spawn_spatial((
                 Transform::from_translation(camera_position.as_vec3())
