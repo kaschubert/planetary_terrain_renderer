@@ -141,8 +141,14 @@ impl PhotoMarkers {
             next_id,
             file_unreadable,
             colour: super::DEFAULT_COLOUR,
+            // Up from the first frame. The markers and their photographs are what the example
+            // is opened for now, and a key you have to find before anything appears is a poor
+            // way to greet someone with a file full of them.
+            showing: super::Showing::Editing,
             card_pixels: CARD_PIXELS,
             corner_radius: CORNER_RADIUS,
+            selected_width: super::tether::SELECTED_WIDTH,
+            scatter_count: super::scatter::SCATTER_COUNT,
             ..default()
         }
     }

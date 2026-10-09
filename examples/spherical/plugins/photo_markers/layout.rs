@@ -7,35 +7,29 @@
 //! total leader length, so a crossing-free arrangement is always available and sorting by anchor
 //! `y` is the one that finds it. Nothing iterative, nothing to tune: one sort does it.
 //!
-//! The pass, in order. Which side, with a dead band at the middle so a card near it does not flip
-//! sides every frame. Who fits, nearest first, the rest left as dots. In what order, by anchor
-//! `y`, which is the rule above. Then the column is settled with one sweep down and one back up,
-//! which is order-preserving by construction, so the sort's work is not undone.
+//! The pass, in order. Which side, by the shape of the photograph: the landscape ones down one
+//! edge and the upright ones down the other. Who fits, nearest the pointer first, the rest left
+//! as dots. In what order, by anchor `y`, which is the rule above. Then the column is settled
+//! with one sweep down and one back up, which is order-preserving by construction, so the sort's
+//! work is not undone.
 //!
-//! The cursor is one more obstacle rather than a special case. A circle round the pointer forbids
-//! an interval of `y` in each column — the chord of the circle across that column's width — and
-//! the interval simply cuts the column into two shorter ones, each packed the same way.
+//! A point of interest decides who gets a card, not where the cards go. When there is not room
+//! for every marker on a side, the ones lying nearest that point keep their cards and the rest
+//! are left as dots. The nearness is given per candidate and measured in the world, so the
+//! engine never learns what the point is — only which markers are close to it.
 //!
 //! Everything here is a function of its arguments. No `World`, no queries, nothing that needs a
 //! window: the hard part of this is the part that can be tested without running anything.
 
 use bevy::prelude::*;
 
+use super::MarkerId;
+
 /// Clear space between two stacked cards, in pixels.
 pub(super) const CARD_GAP: f32 = 10.0;
 
 /// How far a column stands off the edge of the viewport, in pixels.
 pub(super) const EDGE_MARGIN: f32 = 16.0;
-
-/// How wide the dead band at the middle is, in pixels, within which a card keeps the side it had.
-/// Without it a marker sitting on the centre line swaps columns every frame the camera breathes.
-pub(super) const SIDE_BAND: f32 = 60.0;
-
-/// The radius of the circle held clear around the cursor, in pixels, and how much wider that
-/// circle is for a card already out of the way. The second is hysteresis: without it a card at
-/// the boundary flickers between two placements as the pointer jitters by a pixel.
-pub(super) const KEEP_OUT: f32 = 140.0;
-pub(super) const KEEP_OUT_LEAVE: f32 = 30.0;
 
 /// How quickly a card moves to a new place: the time constant of an exponential ease, in seconds.
 pub(super) const SMOOTH_TAU: f32 = 0.12;
@@ -49,6 +43,11 @@ pub(super) enum Side {
     Left,
     Right,
 }
+
+/// Which edge each shape of photograph docks to: the landscape ones one side, the upright ones
+/// the other. A choice rather than a law — swapping the two turns the layout round.
+const LANDSCAPE_SIDE: Side = Side::Left;
+const UPRIGHT_SIDE: Side = Side::Right;
 
 /// One side's stack: where it is and how much room it has.
 ///
@@ -79,28 +78,20 @@ impl Column {
 /// frame to the next.
 #[derive(Debug, Clone, Copy)]
 pub(super) struct Candidate {
+    /// Which marker this is, which is how an order outlives a frame.
+    pub id: MarkerId,
     /// Where the marker falls in the viewport.
     pub anchor: Vec2,
     /// The card's size in pixels, which varies with the photo's shape.
     pub size: Vec2,
-    /// Metres from the camera, which decides who keeps a card when there is not room for all.
-    pub distance: f64,
+    /// How far this marker lies from the point of interest, in metres on the ground. The nearest
+    /// keep their cards when a column cannot hold every marker of its shape.
+    pub nearness: f64,
     /// The selected marker is never the one dropped for want of room.
     pub selected: bool,
-    /// Which side it was on last frame, for the dead band. None for a card that is new.
-    pub was: Option<Side>,
-}
-
-/// A stretch of a column a card may stand in, and which of the column's cards belong to it.
-///
-/// A column with no band in it is one stretch that takes all of them; a band cuts it into two,
-/// each taking the cards whose anchors are on its side of the band's middle.
-#[derive(Debug, Clone, Copy)]
-struct Segment {
-    top: f32,
-    bottom: f32,
-    /// The range of anchor `y` this stretch takes, or all of them.
-    wants: Option<(f32, f32)>,
+    /// Where the card's middle is on screen at this moment, which is what it eases away from.
+    /// None for a card that is new, which simply appears where it belongs.
+    pub at: Option<f32>,
 }
 
 /// Where one card goes.
@@ -113,164 +104,151 @@ pub(super) struct Placement {
 }
 
 /// The whole engine. Candidates in, placements out; anything with no placement is left as a dot.
-/// The radius is given per column rather than once, because the circle is widened for a column
-/// it has already pushed something out of and the two sides engage separately.
+///
+/// What comes back is where to draw a card **this** frame, easing included, and not where it is
+/// eventually headed. That is deliberate: a layout that only promises the destinations promises
+/// nothing about the journey, and a card in flight will happily cross one that has already
+/// arrived. So the move is made here, between the two sweeps, and the second sweep holds the
+/// gaps open on every frame rather than only on the last one.
 pub(super) fn lay_out(
     candidates: &[Candidate],
     columns: &[Column; 2],
-    middle: f32,
-    cursor: Option<Vec2>,
-    keep_out: &[f32; 2],
-) -> Vec<Placement> {
+    held: &[Vec<MarkerId>; 2],
+    delta: f32,
+) -> (Vec<Placement>, [Vec<MarkerId>; 2]) {
     let mut placements = Vec::new();
+    let mut order = [Vec::new(), Vec::new()];
 
-    for (column, &keep_out) in columns.iter().zip(keep_out) {
+    for (slot, column) in columns.iter().enumerate() {
         let mut mine: Vec<usize> = (0..candidates.len())
-            .filter(|&index| side_of(&candidates[index], middle) == column.side)
+            .filter(|&index| side_of(&candidates[index]) == column.side)
             .collect();
         if mine.is_empty() {
             continue;
         }
 
-        // The widest card decides the column's span, which is what the cursor's circle is
-        // measured against: every card in it is flush to the outer edge, so they share a span.
-        let widest = mine.iter().fold(0.0f32, |widest, &index| {
-            widest.max(candidates[index].size.x)
-        });
-        let span = column.x(widest);
-        let band = cursor.and_then(|cursor| forbidden_band(cursor, keep_out, span));
+        // Nearest the point of interest first, which is the whole of the choosing: a column
+        // that cannot hold every card of its shape holds the ones nearest what you asked for.
+        // Then back into anchor order for the packing, which is the no-crossing rule and has
+        // nothing to do with the choosing.
+        mine.sort_by(|&a, &b| candidates[a].nearness.total_cmp(&candidates[b].nearness));
 
-        // Nearest first for the budget, then back into anchor order for the packing. The two
-        // orders are what the engine is: who gets a card, and where it goes.
-        mine.sort_by(|&a, &b| candidates[a].distance.total_cmp(&candidates[b].distance));
+        let mut seats = fit(candidates, &mine, column.bottom - column.top);
 
-        for segment in segments(column, band) {
-            let mut seats = fit(
-                candidates,
-                &mine,
-                segment.bottom - segment.top,
-                segment.wants,
-            );
-            seats.sort_by(|&a, &b| candidates[a].anchor.y.total_cmp(&candidates[b].anchor.y));
-
-            let centres = settle(candidates, &seats, segment.top, segment.bottom);
-            for (index, centre) in seats.iter().copied().zip(centres) {
-                let size = candidates[index].size;
-                let (left, right) = column.x(size.x);
-
-                placements.push(Placement {
-                    index,
-                    rect: Rect {
-                        min: Vec2::new(left, centre - size.y / 2.0),
-                        max: Vec2::new(right, centre + size.y / 2.0),
-                    },
-                    side: column.side,
-                });
+        // The order is settled when the cast changes and held until it changes again.
+        //
+        // Sorting by the anchors afresh every frame was the obvious thing and the wrong one:
+        // the anchors move whenever the camera does, so two cards whose marks drifted past each
+        // other swapped places in the column and slid through one another, for a reason nobody
+        // watching could see. Holding the order costs the no-crossing promise between the frame
+        // it was settled on and the next change — two tethers in a column may cross once their
+        // marks have swapped over — and that is the cheaper of the two prices.
+        match same_cast(&held[slot], &seats, candidates) {
+            true => seats = in_the_order_held(&held[slot], &seats, candidates),
+            false => {
+                seats.sort_by(|&a, &b| candidates[a].anchor.y.total_cmp(&candidates[b].anchor.y))
             }
+        }
+        order[slot] = seats.iter().map(|&seat| candidates[seat].id).collect();
+
+        let heights: Vec<f32> = seats.iter().map(|&seat| candidates[seat].size.y).collect();
+        let anchors: Vec<f32> = seats
+            .iter()
+            .map(|&seat| candidates[seat].anchor.y)
+            .collect();
+
+        // Where each card is headed, where it has got to, and then the gaps again.
+        let targets = settle(&heights, &anchors, column.top, column.bottom);
+        let moved: Vec<f32> = seats
+            .iter()
+            .zip(&targets)
+            .map(|(&seat, &target)| match candidates[seat].at {
+                Some(at) => ease(at, target, delta),
+                // A card that is new appears where it belongs rather than flying in from
+                // wherever the last one to hold that place happened to be.
+                None => target,
+            })
+            .collect();
+        let centres = settle(&heights, &moved, column.top, column.bottom);
+
+        for (index, centre) in seats.iter().copied().zip(centres) {
+            let size = candidates[index].size;
+            let (left, right) = column.x(size.x);
+
+            placements.push(Placement {
+                index,
+                rect: Rect {
+                    min: Vec2::new(left, centre - size.y / 2.0),
+                    max: Vec2::new(right, centre + size.y / 2.0),
+                },
+                side: column.side,
+            });
         }
     }
 
-    placements
+    (placements, order)
 }
 
-/// Which side a card belongs to: its half of the viewport, except within the dead band either way
-/// of the middle, where it keeps the side it already had.
-fn side_of(candidate: &Candidate, middle: f32) -> Side {
-    if let Some(was) = candidate.was
-        && (candidate.anchor.x - middle).abs() < SIDE_BAND / 2.0
-    {
-        return was;
-    }
-
-    match candidate.anchor.x < middle {
-        true => Side::Left,
-        false => Side::Right,
-    }
+/// Whether these are the same cards as last frame, in any order. Ten at the most, so the pair of
+/// loops costs nothing worth saving.
+fn same_cast(held: &[MarkerId], seats: &[usize], candidates: &[Candidate]) -> bool {
+    held.len() == seats.len()
+        && held
+            .iter()
+            .all(|id| seats.iter().any(|&seat| candidates[seat].id == *id))
 }
 
-/// The interval of `y` the cursor's circle forbids in a column of this horizontal span, if it
-/// reaches the column at all.
+/// The same cards, put back into the order they were in. Only called when `same_cast` says every
+/// one of them is still there, so nothing is lost to a lookup that fails.
+fn in_the_order_held(held: &[MarkerId], seats: &[usize], candidates: &[Candidate]) -> Vec<usize> {
+    held.iter()
+        .filter_map(|id| {
+            seats
+                .iter()
+                .copied()
+                .find(|&seat| candidates[seat].id == *id)
+        })
+        .collect()
+}
+
+/// Which side a card belongs to: the shape of the photograph on it, and nothing else.
 ///
-/// The circle meets the column in a chord, and what matters is how tall that chord is: at a
-/// horizontal distance `dx` from the centre, a circle of radius `R` reaches `sqrt(R² - dx²)`
-/// either way. Further off than `R` it misses the column and there is no band.
-pub(super) fn forbidden_band(cursor: Vec2, radius: f32, span: (f32, f32)) -> Option<(f32, f32)> {
-    let dx = (span.0 - cursor.x).max(cursor.x - span.1).max(0.0);
-    if dx >= radius {
-        return None;
-    }
-
-    let half = (radius * radius - dx * dx).sqrt();
-
-    Some((cursor.y - half, cursor.y + half))
-}
-
-/// The stretches of a column left once the cursor's band is taken out of it.
+/// Not the half of the viewport its mark happens to fall in, which is what this was. Sorting by
+/// shape gives each column one kind of card to stack, and a landscape photograph never sits in a
+/// column sized for upright ones. It needs no hysteresis either: a photograph's proportions do
+/// not change as the camera turns, so there is nothing to flicker between.
 ///
-/// The split is by a single threshold, the band's middle, so it is monotonic in anchor `y`: every
-/// card above it goes to the upper stretch and every card below to the lower. That is what keeps
-/// the order, and with it the promise that no two tethers cross.
-fn segments(column: &Column, band: Option<(f32, f32)>) -> Vec<Segment> {
-    let Some((from, to)) = band else {
-        return vec![Segment {
-            top: column.top,
-            bottom: column.bottom,
-            wants: None,
-        }];
-    };
-
-    let middle = (from + to) / 2.0;
-    let mut out = Vec::new();
-
-    if from > column.top {
-        out.push(Segment {
-            top: column.top,
-            bottom: from.min(column.bottom),
-            wants: Some((f32::MIN, middle)),
-        });
+/// What it costs is the tethers. A landscape photograph of something away to the right now docks
+/// on the left, and its line crosses the view to get there; lines to opposite columns cross each
+/// other freely. The no-crossing rule still holds inside a column, which is where it was ever a
+/// promise, but the picture is a busier one than sorting by place gave.
+fn side_of(candidate: &Candidate) -> Side {
+    match candidate.size.x >= candidate.size.y {
+        true => LANDSCAPE_SIDE,
+        false => UPRIGHT_SIDE,
     }
-    if to < column.bottom {
-        out.push(Segment {
-            top: to.max(column.top),
-            bottom: column.bottom,
-            wants: Some((middle, f32::MAX)),
-        });
-    }
-
-    out
 }
 
-/// Who gets a card in a stretch this tall: the ones whose anchors want it, nearest first, taken
-/// while the heights and the gaps between them still fit. The selected marker is never the one
-/// left out.
-fn fit(
-    candidates: &[Candidate],
-    by_distance: &[usize],
-    height: f32,
-    wants: Option<(f32, f32)>,
-) -> Vec<usize> {
+/// Who gets a card in a column this tall: taken in the order given, which is nearest the pointer
+/// first, while the heights and the gaps between them still fit. The selected marker is never
+/// the one left out.
+fn fit(candidates: &[Candidate], by_nearness: &[usize], height: f32) -> Vec<usize> {
     let mut taken: Vec<usize> = Vec::new();
     let mut used = 0.0;
 
     // The selected card is offered the room first, so that running out never takes it.
-    let order = by_distance
+    let order = by_nearness
         .iter()
         .copied()
         .filter(|&index| candidates[index].selected)
         .chain(
-            by_distance
+            by_nearness
                 .iter()
                 .copied()
                 .filter(|&index| !candidates[index].selected),
         );
 
     for index in order {
-        if let Some((from, to)) = wants
-            && !(from..to).contains(&candidates[index].anchor.y)
-        {
-            continue;
-        }
-
         let card = candidates[index].size.y;
         let wanted = match taken.is_empty() {
             true => card,
@@ -289,33 +267,30 @@ fn fit(
 
 /// Where each card's centre ends up, given in anchor order and returned in the same order.
 ///
-/// Each wants its centre at its anchor's height. One pass down pushes each card clear of the one
-/// above it, one pass back up pushes it clear of the one below, and both are clamped to the
-/// stretch. Two passes, order preserved, done — which is the classic one-dimensional label
-/// stacking, and the reason the no-crossing property survives the packing.
-fn settle(candidates: &[Candidate], seats: &[usize], top: f32, bottom: f32) -> Vec<f32> {
-    let height = |index: usize| candidates[index].size.y;
-    let mut centres: Vec<f32> = Vec::with_capacity(seats.len());
+/// Each wants to be where `wanted` says. One pass down pushes each card clear of the one above
+/// it, one pass back up pushes it clear of the one below, and both are clamped to the stretch.
+/// Two passes, order preserved, done — which is the classic one-dimensional label stacking, and
+/// the reason the no-crossing property survives the packing.
+///
+/// It is run twice a frame on the same cards: once on where their anchors are, to find where
+/// they are headed, and once on where the easing has actually put them, so that what is drawn
+/// obeys the gaps too.
+fn settle(heights: &[f32], wanted: &[f32], top: f32, bottom: f32) -> Vec<f32> {
+    let mut centres: Vec<f32> = Vec::with_capacity(heights.len());
 
-    for (place, &index) in seats.iter().enumerate() {
-        let wanted = candidates[index].anchor.y;
+    for (place, &height) in heights.iter().enumerate() {
         let floor = match place {
-            0 => top + height(index) / 2.0,
-            place => {
-                let above = seats[place - 1];
-                centres[place - 1] + height(above) / 2.0 + CARD_GAP + height(index) / 2.0
-            }
+            0 => top + height / 2.0,
+            place => centres[place - 1] + heights[place - 1] / 2.0 + CARD_GAP + height / 2.0,
         };
-        centres.push(wanted.max(floor));
+        centres.push(wanted[place].max(floor));
     }
 
-    for place in (0..seats.len()).rev() {
-        let index = seats[place];
-        let ceiling = match place + 1 == seats.len() {
-            true => bottom - height(index) / 2.0,
+    for place in (0..heights.len()).rev() {
+        let ceiling = match place + 1 == heights.len() {
+            true => bottom - heights[place] / 2.0,
             false => {
-                let below = seats[place + 1];
-                centres[place + 1] - height(below) / 2.0 - CARD_GAP - height(index) / 2.0
+                centres[place + 1] - heights[place + 1] / 2.0 - CARD_GAP - heights[place] / 2.0
             }
         };
         centres[place] = centres[place].min(ceiling);
@@ -324,13 +299,18 @@ fn settle(candidates: &[Candidate], seats: &[usize], top: f32, bottom: f32) -> V
     centres
 }
 
-/// A card's new position on its way to the one the layout gave it: an exponential ease, which is
-/// the same however many frames a second the window is running at, and a snap once it is within a
-/// pixel so that nothing writes its node for ever.
-pub(super) fn ease(current: Vec2, target: Vec2, delta: f32) -> Vec2 {
-    if current.distance_squared(target) <= SNAP * SNAP {
+/// A card's height on its way to the one the layout gave it: an exponential ease, the same
+/// however many frames a second the window is running at, and a snap once it is within a pixel so
+/// that nothing writes its node for ever.
+///
+/// Only the height. A card is always flush to its column's outer edge, so there is nothing to
+/// ease sideways; a card that changes column arrives at the new one's edge at once and walks the
+/// rest of the way up or down. Easing the width as well was what sent one flying diagonally
+/// across the viewport, over everything in its path.
+pub(super) fn ease(current: f32, target: f32, delta: f32) -> f32 {
+    if (target - current).abs() <= SNAP {
         return target;
     }
 
-    current.lerp(target, 1.0 - (-delta / SMOOTH_TAU).exp())
+    current + (target - current) * (1.0 - (-delta / SMOOTH_TAU).exp())
 }

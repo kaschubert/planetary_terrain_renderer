@@ -16,8 +16,9 @@
 //! photograph needs. What is left in the scene is a dot at the marker's place. The plate that
 //! used to stand there spent four fifths of its pixels on a border, which is what this is for.
 //!
-//! The cards come up with the F10 panel and go down with it; the dots are always drawn, so a
-//! marker is still a thing on the terrain with the panel closed, and still clickable.
+//! F10 cycles what is shown: nothing, the photographs on their own, the photographs and the
+//! panel. The dots are drawn in all three, so a marker is still a thing on the terrain with
+//! everything else away, and still clickable.
 //!
 //! What is where: the card in card.rs, the dropped photos in photo.rs, the F10 panel in
 //! panel.rs, the saved file in file.rs. Everything that places or reads a marker runs in
@@ -25,8 +26,10 @@
 //! against where things are this frame.
 
 use bevy::ecs::query::QueryData;
+use bevy::gizmos::config::GizmoLineJoint;
 use bevy::math::DVec3;
 use bevy::prelude::*;
+use bevy::ui::UiSystems;
 use bevy::window::PrimaryWindow;
 use bevy_terrain::prelude::*;
 use big_space::prelude::{CellCoord, Grids};
@@ -37,14 +40,16 @@ use super::rail_editor::clicks::ClickDetector;
 use super::rail_editor::frame::{Frame, unit_under};
 use super::sheet_grid::IN_FRONT_OF_TERRAIN;
 use super::track_frames::TrackSplines;
-use super::trains::{CARRIAGE_HEIGHT, CARRIAGE_LENGTH, Trains, carriage_frame};
-use card::EMPTY_ASPECT;
+use super::trains::{CARRIAGE_HEIGHT, Trains, carriage_frame, carriage_under};
+use card::{CardPlace, EMPTY_ASPECT, MarkerCard, card_under};
 
 mod card;
 mod file;
 mod layout;
 mod panel;
 mod photo;
+mod scatter;
+mod season;
 mod tether;
 
 /// How far the base of a marker floats above the terrain, in metres. Kept now that the plate has
@@ -54,17 +59,13 @@ pub(super) const HOVER_HEIGHT: f64 = 10.0;
 
 /// How near a marker's dot the cursor has to be for a plain click to select it, in pixels. The
 /// editor's discs use 10 for points a few pixels across, and a dot is one of those; a click on
-/// the card itself is a separate route, see card::select_on_click.
+/// the card itself is tested against the card's own rectangle instead, see card::card_under.
 const PICK_PIXELS: f32 = 12.0;
 
 /// The colour a marker takes when nothing has said otherwise: a very light grey. Held as hue,
 /// saturation and value rather than as a colour, so that the panel's hue slider still means
 /// something at zero saturation, where a grey has no hue to read back.
 const DEFAULT_COLOUR: Hsva = Hsva::hsv(0.0, 0.0, 0.9);
-
-/// The ring round the selected marker: white, as the editor's selected discs are, which no
-/// marker colour can be mistaken for.
-const SELECTION_COLOUR: Color = Color::WHITE;
 
 /// How big a marker's dot is drawn, as a radius in pixels, and the ring round the selected one.
 /// Held at a size on screen rather than in metres: a dot is a mark on the map, not a thing in
@@ -76,6 +77,14 @@ const SELECTED_PIXELS: f32 = 9.0;
 /// the rail overlays are without the default group's settings following it.
 #[derive(Default, Reflect, GizmoConfigGroup)]
 pub(super) struct PhotoMarkerGizmos;
+
+/// The selected marker's dot and tether, drawn thicker.
+///
+/// A group of its own because that is the only way to have two widths: a gizmo's line width is
+/// one number for a whole config group, so a bold line and a thin one cannot come from the same
+/// one. Everything else about it matches PhotoMarkerGizmos, the depth bias included.
+#[derive(Default, Reflect, GizmoConfigGroup)]
+pub(super) struct SelectedMarkerGizmos;
 
 /// A marker's identity, which outlives its index in the list.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -150,13 +159,64 @@ impl PhotoMarker {
     }
 }
 
+/// What F10 is showing, which it cycles through on every press.
+///
+/// Three rather than two because looking at the photographs and editing them are different
+/// things wanting different amounts of the screen: a panel in the corner is in the way of the
+/// very thing it was opened to make. The middle state is not merely the panel hidden, it is not
+/// editing &mdash; so Delete and Escape mean nothing here again, the corner is given back, and
+/// the rail editor can be worked in while the photographs are up.
+///
+/// Which state you are in needs no caption: nothing on screen is Nothing, cards are Photos, and
+/// cards with a panel under them are Editing.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum Showing {
+    #[default]
+    Nothing,
+    /// The cards and their tethers, with nothing to edit them by.
+    Photos,
+    /// Those and the panel, which is the only state that claims the keys and the corner.
+    Editing,
+}
+
+impl Showing {
+    /// Whether the cards are drawn at all. The dots are drawn in every state, so a marker is
+    /// always a thing on the terrain.
+    pub fn cards(self) -> bool {
+        self != Self::Nothing
+    }
+
+    /// Whether the panel is up, which is the same question as whether Delete and Escape are
+    /// this plugin's and whether the rail editor has been stood down.
+    pub fn editing(self) -> bool {
+        self == Self::Editing
+    }
+
+    /// What a press of F10 moves to: open for work, stand back and look, put away.
+    pub fn next(self) -> Self {
+        match self {
+            Self::Nothing => Self::Editing,
+            Self::Editing => Self::Photos,
+            Self::Photos => Self::Nothing,
+        }
+    }
+
+    pub fn name(self) -> &'static str {
+        match self {
+            Self::Nothing => "off",
+            Self::Photos => "photos, no panel",
+            Self::Editing => "photos and the panel",
+        }
+    }
+}
+
 /// The markers, the selection, and the switch that shows the panel.
 #[derive(Resource, Default)]
 pub struct PhotoMarkers {
-    /// Toggled by F10, in panel.rs, which shows the panel exactly while this is on. It gates the
-    /// panel and the keys that destroy something, Delete and Escape, and nothing else: placing
-    /// and selecting both work with it off, since neither can be done by accident.
-    pub editing: bool,
+    /// Cycled by F10, in panel.rs. It gates the cards, the panel and the keys that destroy
+    /// something, Delete and Escape, and nothing else: placing and selecting both work in every
+    /// state, since neither can be done by accident, and the dots are always drawn.
+    pub showing: Showing,
     pub markers: Vec<PhotoMarker>,
     /// The marker last placed or clicked, as an index into markers. A dropped photo goes to it.
     pub selected: Option<usize>,
@@ -171,13 +231,21 @@ pub struct PhotoMarkers {
     /// How far every card's corners are rounded, in pixels, before the clamp to half the short
     /// edge. One number for the same reason.
     pub corner_radius: f32,
+    /// How heavy the selected marker is drawn, in pixels: its tether, its dot, the ring round
+    /// it and the frame round its card. Everything else keeps TETHER_WIDTH.
+    pub selected_width: f32,
+    /// How many markers the panel's scatter button makes. A testing affordance, see scatter.rs,
+    /// and the one field here that is not about what a marker is.
+    pub scatter_count: f32,
     /// Edits not yet written to the file, which dims the panel's save button when there are none.
     pub dirty: bool,
     /// Set when there is a file that would not read, which blocks saving over it; see file.rs.
     pub file_unreadable: bool,
     clicks: ClickDetector,
-    /// Whether Control was down when the press began, so that the release knows which it was.
+    /// Whether Control was down when the press began, so that the release knows which it was,
+    /// and whether Shift was with it, which is the scatter's chord rather than the placing's.
     chord: bool,
+    shifted: bool,
     next_id: u32,
 }
 
@@ -275,8 +343,14 @@ impl Plugin for PhotoMarkersPlugin {
     fn build(&self, app: &mut App) {
         app.insert_resource(PhotoMarkers::load())
             .init_resource::<MarkerView>()
+            .init_resource::<scatter::Scatter>()
+            .insert_resource(season::Seasons::load())
             .init_gizmo_group::<PhotoMarkerGizmos>()
+            .init_gizmo_group::<SelectedMarkerGizmos>()
             .add_systems(Startup, configure_marker_gizmos)
+            // Every frame rather than on a change of the markers: the widths depend on the
+            // window's scale factor too, and that changes when it is dragged to another screen.
+            .add_systems(Update, resize_marker_gizmos)
             .add_plugins(panel::PhotoPanelPlugin)
             .add_systems(
                 Update,
@@ -288,29 +362,29 @@ impl Plugin for PhotoMarkersPlugin {
                         photo::tint_on_hover,
                         photo::receive_drops,
                         photo::poll_photos,
+                        scatter::poll_folder,
                     ),
                 )
                     .chain(),
             )
             .add_systems(
                 PostUpdate,
-                // All of it after the transforms have propagated, as the editor's mouse is: the
-                // markers are projected through the camera rather than placed in the world, so
-                // everything here wants the camera settled where it is this frame.
+                // After the transforms have propagated, as the editor's mouse is: the markers
+                // are projected through the camera rather than placed in the world, so
+                // everything here wants the camera settled where it is this frame. And before
+                // the nodes are laid out, as the stations' and the trains' labels are, or a
+                // card would be drawn where it was last frame while its tether left from where
+                // it is this one.
                 (
                     place_markers,
                     card::place_cards,
-                    (
-                        card::select_on_click,
-                        edit_with_mouse,
-                        draw_anchors,
-                        tether::draw_tethers,
-                    )
+                    (edit_with_mouse, draw_anchors, tether::draw_tethers)
                         .chain()
                         .in_set(PhotoMarkerSystems),
                 )
                     .chain()
-                    .after(TransformSystems::Propagate),
+                    .after(TransformSystems::Propagate)
+                    .before(UiSystems::Prepare),
             );
     }
 }
@@ -329,12 +403,60 @@ pub(super) struct MarkerCamera {
     picking: &'static PickingData,
 }
 
+/// The depth bias and the joins, once. The widths are resize_marker_gizmos's, every frame,
+/// because they depend on the window as well as on the panel.
+///
+/// The joins are what make a curve a curve. A gizmo line strip is drawn as one quad per segment,
+/// each squared off across its own direction, and with `GizmoLineJoint::None` — the default, and
+/// what this was leaving it at — nothing is drawn in the wedge the two quads leave open on the
+/// outside of every bend. At three pixels that wedge is under a pixel and nobody sees it; at the
+/// sixteen the selected marker can be set to, a sampled curve reads as a row of separate slabs.
+/// Miter rather than round: the curve is a cubic cut into twenty, so each turn is a degree or
+/// two, which is exactly where extending the two edges until they meet is both right and
+/// cheapest. Miter spikes only at angles far sharper than anything drawn here.
 fn configure_marker_gizmos(mut store: ResMut<GizmoConfigStore>) {
     let (config, _) = store.config_mut::<PhotoMarkerGizmos>();
     config.depth_bias = IN_FRONT_OF_TERRAIN;
-    // One width for the whole group, so the dots are drawn at it too. A tether that widens where
-    // it meets the card wants a mesh of its own; see tether.rs.
-    config.line.width = tether::TETHER_WIDTH;
+    config.line.joints = GizmoLineJoint::Miter;
+
+    let (config, _) = store.config_mut::<SelectedMarkerGizmos>();
+    config.depth_bias = IN_FRONT_OF_TERRAIN;
+    config.line.joints = GizmoLineJoint::Miter;
+}
+
+/// Keeps both gizmo groups at their widths, in the pixels the renderer actually means.
+///
+/// A gizmo's width is in **physical** pixels. The shader adds it straight to a position measured
+/// in `view.viewport.zw`, which is the physical target, and nothing multiplies it by anything on
+/// the way. Everything else here is in **logical** pixels: the viewport the layout works in, the
+/// card's size, the corner radius, and the `Val::Px` of the card's frame, which bevy_ui resolves
+/// by multiplying by the scale factor. So the panel's numbers mean logical pixels, as the rest of
+/// it does, and the scale factor is put back here.
+///
+/// Without that, on a screen at scale 2 a frame and a tether set to the same 6 came out 12
+/// physical pixels and 6 — which is exactly what they looked like.
+///
+/// One width for a whole group, which is why the selected marker needs a group of its own; a
+/// tether that widens where it meets the card wants a mesh of its own, see tether.rs.
+fn resize_marker_gizmos(
+    markers: Res<PhotoMarkers>,
+    window: Query<&Window, With<PrimaryWindow>>,
+    mut store: ResMut<GizmoConfigStore>,
+) {
+    let Ok(window) = window.single() else {
+        return;
+    };
+    let scale = window.scale_factor();
+    let (thin, bold) = (tether::TETHER_WIDTH * scale, markers.selected_width * scale);
+
+    // Written only when one of them has actually moved. The store is shared with every other
+    // overlay's gizmos, so touching it marks it changed for all of them.
+    if store.config::<PhotoMarkerGizmos>().0.line.width != thin
+        || store.config::<SelectedMarkerGizmos>().0.line.width != bold
+    {
+        store.config_mut::<PhotoMarkerGizmos>().0.line.width = thin;
+        store.config_mut::<SelectedMarkerGizmos>().0.line.width = bold;
+    }
 }
 
 /// The focal length in pixels: a metre at a metre's distance covers this many pixels, as the
@@ -418,12 +540,14 @@ fn edit_with_mouse(
     buttons: Res<ButtonInput<MouseButton>>,
     keys: Res<ButtonInput<KeyCode>>,
     capture: Res<PointerCapture>,
+    scatter: Res<scatter::Scatter>,
     time: Res<Time<Real>>,
     window: Query<&Window, With<PrimaryWindow>>,
     grids: Grids,
     camera: Query<MarkerCamera, With<OrbitalCameraController>>,
+    cards: Query<(&MarkerCard, &CardPlace, &Visibility)>,
 ) {
-    if markers.editing {
+    if markers.showing.editing() {
         if keys.just_pressed(KeyCode::Escape) {
             markers.selected = None;
         }
@@ -442,15 +566,32 @@ fn edit_with_mouse(
     };
     let now = time.elapsed_secs_f64();
 
+    // Where the cards are, which both the press and the release want.
+    let drawn: Vec<(usize, Rect)> = cards
+        .iter()
+        .filter(|(_, _, visibility)| **visibility == Visibility::Visible)
+        .filter_map(|(card, place, _)| Some((markers.index_of(card.0)?, place.rect()?)))
+        .collect();
+
     if buttons.just_pressed(MouseButton::Left) {
         markers.chord = keys.pressed(KeyCode::ControlLeft) || keys.pressed(KeyCode::ControlRight);
-        let blocked = capture.blocks_pointer();
+        markers.shifted = keys.pressed(KeyCode::ShiftLeft) || keys.pressed(KeyCode::ShiftRight);
+
+        // A press over the UI is the UI's and is no click of ours — except over one of our own
+        // cards, which is UI this plugin picks for itself. The cards block the pointer so that a
+        // drag across one does not swing the planet underneath it, and that same blocking would
+        // otherwise throw away the press that selects one.
+        let ours = card_under(&drawn, cursor).is_some();
+        let blocked = capture.blocks_pointer() && !ours;
+        if blocked && markers.chord {
+            warn!("photo markers: a chord pressed over the interface is the interface's");
+        }
         markers.clicks.press(cursor, now, blocked);
     }
     if !buttons.just_released(MouseButton::Left) {
         return;
     }
-    let chord = markers.chord;
+    let (chord, shifted) = (markers.chord, markers.shifted);
     let Some(click) = markers.clicks.release(cursor, now) else {
         return;
     };
@@ -469,14 +610,18 @@ fn edit_with_mouse(
         let cell_origin = grid.cell_to_float(camera.cell);
         let camera_position = grid.grid_position_double(camera.cell, camera.transform);
 
-        if let Some(index) = nearest_marker(
-            &markers,
-            camera_position,
-            camera.camera,
-            camera.global,
-            cell_origin,
-            click.position(),
-        ) {
+        // The cards first, since a click on a photograph can only have meant that photograph,
+        // and then the dots, which is the route for a marker whose card is not drawn.
+        if let Some(index) = card_under(&drawn, click.position()).or_else(|| {
+            nearest_marker(
+                &markers,
+                camera_position,
+                camera.camera,
+                camera.global,
+                cell_origin,
+                click.position(),
+            )
+        }) {
             markers.select(index);
             let marker = &markers.markers[index];
             info!(
@@ -495,13 +640,42 @@ fn edit_with_mouse(
         return;
     }
 
+    // Control and Shift together scatter the panel's count of test markers about the ground
+    // clicked, rather than standing one there. The same chord the button uses, with a place to
+    // put them: a button has none and takes the ground under the camera instead.
+    if shifted {
+        // Every way this can fail says so. A chord that quietly does nothing is indis-
+        // tinguishable from one that is not bound at all, and the two want different fixes.
+        let Some(translation) = camera.picking.translation else {
+            warn!("photo markers: nothing under the pointer to scatter about");
+            return;
+        };
+        if !scatter.ready() {
+            warn!(
+                "photo markers: no folder of photographs to scatter from; press F10 and then \
+                 folder... The folder is chosen afresh each run."
+            );
+            return;
+        }
+
+        let around = grid.grid_position_double(
+            &camera.picking.cell,
+            &Transform::from_translation(translation),
+        );
+        let camera_position = grid.grid_position_double(camera.cell, camera.transform);
+        let (_, altitude) = scatter::over_the_camera(camera_position);
+
+        scatter::scatter_markers(&mut markers, &scatter, around, altitude, &mut commands);
+        return;
+    }
+
     // A train under the cursor takes the marker instead of the ground does, and it rides from
     // then on. Tested on screen rather than by the pick, which reads the terrain's own depth
     // and so sees straight through a carriage to the ground behind it.
     let cell_origin = grid.cell_to_float(camera.cell);
     let camera_position = grid.grid_position_double(camera.cell, camera.transform);
     let riding = trains.drawn(&rail).then(|| {
-        nearest_carriage(
+        carriage_under(
             &trains,
             &splines,
             camera.camera,
@@ -560,61 +734,6 @@ fn edit_with_mouse(
     }
 }
 
-/// The carriage nearest the cursor on screen and where it stands, if the cursor is on one. The
-/// reach is half the carriage's own length on screen, so a train filling the view can be hit
-/// anywhere along it and a distant one still takes a deliberate click.
-#[allow(clippy::too_many_arguments)]
-fn nearest_carriage(
-    trains: &Trains,
-    splines: &TrackSplines,
-    camera: &Camera,
-    camera_global: &GlobalTransform,
-    cell_origin: DVec3,
-    camera_position: DVec3,
-    cursor: Vec2,
-) -> Option<(Entity, DVec3)> {
-    let mut nearest: Option<(Entity, DVec3, f32)> = None;
-
-    for train in &trains.trains {
-        let Some(carriage) = train.entity else {
-            continue;
-        };
-        let Some(spline) = splines.splines.get(train.line).and_then(Option::as_ref) else {
-            continue;
-        };
-
-        let frame = carriage_frame(spline, train);
-        // The middle of the carriage's side, which is what a click at a train aims at.
-        let middle = frame.position + frame.up() * (CARRIAGE_HEIGHT as f64 / 2.0);
-        let Ok(on_screen) =
-            camera.world_to_viewport(camera_global, (middle - cell_origin).as_vec3())
-        else {
-            continue;
-        };
-
-        // Over the horizon the planet hides the carriage, though it still projects onto the
-        // screen; the labels test their roof the same way.
-        if (camera_position - middle).dot(middle) < 0.0 {
-            continue;
-        }
-
-        let Ok(nose) = camera.world_to_viewport(
-            camera_global,
-            (middle + frame.forward() * (CARRIAGE_LENGTH as f64 / 2.0) - cell_origin).as_vec3(),
-        ) else {
-            continue;
-        };
-
-        let reach = PICK_PIXELS.max(on_screen.distance(nose));
-        let distance = on_screen.distance(cursor);
-        if distance <= reach && nearest.is_none_or(|(_, _, best)| distance < best) {
-            nearest = Some((carriage, frame.position, distance));
-        }
-    }
-
-    nearest.map(|(carriage, position, _)| (carriage, position))
-}
-
 /// The marker whose dot is nearest the cursor, if the cursor is within PICK_PIXELS of it.
 ///
 /// Only the dot: a click on the card itself goes through the card's own Interaction, see
@@ -651,17 +770,20 @@ fn nearest_marker(
     nearest.map(|(index, _)| index)
 }
 
-/// A dot at every marker's place, in its own colour, and a ring round the selected one.
+/// A dot at every marker's place, in its season's colour, and a wider ring round the selected one.
 ///
-/// This is what a marker is when its card is not drawn, and what the tether will run to once
-/// there is one. The colour lives here rather than on the card: a card is the photograph and
-/// nothing else, so the eight presets have the dot and the tether to mean something on.
+/// This is what a marker is when its card is not drawn, and what its tether runs to. The dot
+/// takes the same colour as the tether and the card's frame, see season.rs, so that a line can be
+/// followed to the right mark; the ring takes CREAM, the one colour selection is ever said in, so
+/// that which marker is selected is never a question about shades.
 ///
 /// Drawn at a size on screen rather than in metres, by working the radius back from the distance
 /// and the focal length, so a dot is a dot from a kilometre up and from orbit.
 fn draw_anchors(
     mut gizmos: Gizmos<PhotoMarkerGizmos>,
+    mut bold: Gizmos<SelectedMarkerGizmos>,
     markers: Res<PhotoMarkers>,
+    seasons: Res<season::Seasons>,
     grids: Grids,
     camera: Query<MarkerCamera, With<OrbitalCameraController>>,
 ) {
@@ -692,9 +814,12 @@ fn draw_anchors(
             Quat::from_rotation_arc(Vec3::Z, towards.normalize().as_vec3()),
         );
 
-        gizmos.circle(isometry, DOT_PIXELS * metres, Color::from(marker.colour));
+        let colour = seasons.colour_of(marker);
         if Some(index) == markers.selected {
-            gizmos.circle(isometry, SELECTED_PIXELS * metres, SELECTION_COLOUR);
+            bold.circle(isometry, DOT_PIXELS * metres, colour);
+            bold.circle(isometry, SELECTED_PIXELS * metres, card::CREAM);
+        } else {
+            gizmos.circle(isometry, DOT_PIXELS * metres, colour);
         }
     }
 }

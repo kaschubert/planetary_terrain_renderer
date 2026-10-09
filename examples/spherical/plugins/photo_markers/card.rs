@@ -22,18 +22,17 @@
 
 use bevy::image::TRANSPARENT_IMAGE_HANDLE;
 use bevy::math::DVec3;
-use bevy::picking::Pickable;
 use bevy::prelude::*;
 use bevy::ui::{ComputedNode, UiGlobalTransform};
-use bevy::window::PrimaryWindow;
-use bevy_terrain::prelude::OrbitalCameraController;
+use bevy_terrain::prelude::{OrbitalCameraController, TerrainShape};
 use big_space::prelude::Grids;
+use std::collections::HashMap;
 
-use super::layout::{
-    self, CARD_GAP, Candidate, Column, EDGE_MARGIN, KEEP_OUT, KEEP_OUT_LEAVE, Side,
-};
+use super::layout::{self, CARD_GAP, Candidate, Column, EDGE_MARGIN, Side};
 use super::panel::MarkerPanel;
-use super::{MarkerCamera, MarkerId, PhotoMarkers, SELECTION_COLOUR, photo};
+use super::tether::{SELECTED_WIDTH, TETHER_WIDTH};
+use super::{MarkerCamera, MarkerId, PhotoMarkers, photo};
+use crate::plugins::rail_editor::frame::unit_under;
 
 /// How big a card is drawn, measured on its long edge, in pixels, and where the panel's slider
 /// starts. The card is in screen space, so this is the size itself rather than a size in metres
@@ -51,20 +50,20 @@ pub(super) const CORNER_RADIUS: f32 = 12.0;
 pub(super) const MIN_RADIUS: f32 = 0.0;
 pub(super) const MAX_RADIUS: f32 = 40.0;
 
-/// The cream a card shows before a photo lands on it, and when the file it names will not read.
-/// Light rather than dark, so an empty card reads as a blank print waiting for one rather than
-/// as a screen that is off.
-pub(super) const EMPTY_CARD: Color = Color::srgb(0.96, 0.94, 0.89);
+/// The cream this plugin draws its own marks in: the blank a card shows before a photograph
+/// lands on it, and the frame and ring that say which marker is selected.
+///
+/// One colour for both, and a constant rather than the selected marker's own. Painting the
+/// selection in the marker's colour put a second thing in that colour on a marker that already
+/// had one, and left a pale marker's frame invisible against a pale photograph. A constant says
+/// "this one" and nothing else; cream rather than white because it sits against a photograph
+/// without glaring, and because it is already the colour of a card with nothing on it.
+pub(super) const CREAM: Color = Color::srgb(0.96, 0.94, 0.89);
 
 /// The shape of a card with no photo to take a shape from. Four by three, which is what most of
 /// the photographs that land on these are, so a card changes size rather than proportion when
 /// one arrives.
 pub(super) const EMPTY_ASPECT: f32 = 4.0 / 3.0;
-
-/// How thick the selected card's ring is, and how far it stands off the card. Its colour is the
-/// parent module's SELECTION_COLOUR, which the dot's ring uses too.
-const OUTLINE_WIDTH: f32 = 2.0;
-const OUTLINE_OFFSET: f32 = 2.0;
 
 /// Where the cards sit in the UI stack: under everything else, so the F5 and F10 panels are
 /// never covered by a photograph. A global index rather than a local one, because the cards are
@@ -76,23 +75,17 @@ const CARD_LAYER: i32 = -1;
 #[derive(Component)]
 pub(super) struct MarkerCard(pub(super) MarkerId);
 
-/// Where a card actually is at this moment, and which side it is docked to.
-///
-/// Both are what the next frame needs back. The layout answers with where a card ought to be, and
-/// the card eases towards that from where it is rather than jumping; the side is remembered so
-/// that a marker hovering near the middle of the viewport keeps the column it is already in.
+/// Where a card is at this moment, which is what the next frame eases it away from.
 #[derive(Component, Default)]
 pub(super) struct CardPlace {
-    at: Option<Vec2>,
-    size: Vec2,
-    side: Option<Side>,
+    at: Option<Rect>,
 }
 
 impl CardPlace {
     /// Where the card is in the viewport this frame, which the tether leaves from. None while it
     /// is put away and has no place to speak of.
     pub(super) fn rect(&self) -> Option<Rect> {
-        self.at.map(|at| Rect::from_corners(at, at + self.size))
+        self.at
     }
 }
 
@@ -164,20 +157,22 @@ pub(super) fn spawn_cards(mut commands: Commands, mut markers: ResMut<PhotoMarke
                 // Transparent until a photo arrives, which the renderer skips entirely, so the
                 // cream below shows through without anything having to ask whether it should.
                 ImageNode::default(),
-                BackgroundColor(EMPTY_CARD),
+                BackgroundColor(CREAM),
+                // Every card has a frame, in the colour of its own tether and at the same
+                // width, so a photograph down the side of the viewport can be matched to the
+                // mark on the ground it belongs to without following the line. Both are set
+                // each frame in place_cards; set rather than inserted and removed, so selecting
+                // a marker does not cost an archetype move every time.
+                //
+                // No offset: Bevy gives an outline's corners a radius of the node's plus the
+                // width plus the offset, so at zero the frame's inner edge is exactly
+                // concentric with the card's own rounded corner, and there is nowhere along it,
+                // corners included, for the terrain to show between the two.
                 Outline {
-                    width: Val::Px(OUTLINE_WIDTH),
-                    offset: Val::Px(OUTLINE_OFFSET),
-                    // Set rather than inserted and removed, so selecting a marker does not cost
-                    // an archetype move every time.
+                    width: Val::Px(SELECTED_WIDTH),
+                    offset: Val::ZERO,
                     color: Color::NONE,
                 },
-                // Clicking a card selects its marker, which Interaction reports; dragging from
-                // one still pans, which IGNORE allows. The two do not fight: ui_focus_system
-                // works Interaction out from the cursor and the UI stack and never looks at
-                // Pickable, while the camera's PointerCapture reads the picking hover map.
-                Interaction::default(),
-                Pickable::IGNORE,
                 GlobalZIndex(CARD_LAYER),
                 Visibility::Hidden,
             ))
@@ -215,14 +210,22 @@ pub(super) fn spawn_cards(mut commands: Commands, mut markers: ResMut<PhotoMarke
 #[allow(clippy::too_many_arguments)]
 pub(super) fn place_cards(
     markers: Res<PhotoMarkers>,
+    seasons: Res<super::season::Seasons>,
     mut view: ResMut<super::MarkerView>,
     time: Res<Time>,
+    keys: Res<ButtonInput<KeyCode>>,
+    mut focus: Local<Option<DVec3>>,
+    mut order: Local<[Vec<super::MarkerId>; 2]>,
     grids: Grids,
     camera: Query<MarkerCamera, With<OrbitalCameraController>>,
-    window: Query<&Window, With<PrimaryWindow>>,
     panel: Query<(&ComputedNode, &UiGlobalTransform), With<MarkerPanel>>,
-    mut engaged: Local<[bool; 2]>,
-    mut cards: Query<(&mut Node, &mut Visibility, &mut Outline, &mut CardPlace)>,
+    mut cards: Query<(
+        Entity,
+        &mut Node,
+        &mut Visibility,
+        &mut Outline,
+        &mut CardPlace,
+    )>,
 ) {
     let seen = camera.single().ok().and_then(|camera| {
         let grid = grids.parent_grid(camera.entity)?;
@@ -234,22 +237,52 @@ pub(super) fn place_cards(
             grid.cell_to_float(camera.cell),
             grid.grid_position_double(camera.cell, camera.transform),
             viewport,
+            // The terrain under the pointer, as the picking pass read it back, which is the
+            // same hit a Ctrl+click places a marker on. None over sky, or before the readback
+            // has caught up.
+            camera.picking.translation.map(|translation| {
+                grid.grid_position_double(
+                    &camera.picking.cell,
+                    &Transform::from_translation(translation),
+                )
+            }),
         ))
     });
 
-    // Nothing is drawn while the panel is down, which is what ties the cards to F10, and nothing
-    // before the window has told the camera its size. A card put away forgets where it was, so
+    // Nothing is drawn while F10 has the cards away, and nothing before the window has told the
+    // camera its size. A card put away forgets where it was, so
     // that it does not fly across the viewport from a stale place when it comes back.
-    let Some((camera, global, cell_origin, camera_position, viewport)) =
-        seen.filter(|_| markers.editing)
+    let Some((camera, global, cell_origin, camera_position, viewport, picked)) =
+        seen.filter(|_| markers.showing.cards())
     else {
-        for (_, mut visibility, _, mut place) in &mut cards {
+        for (_, _, mut visibility, _, mut place) in &mut cards {
             visibility.set_if_neq(Visibility::Hidden);
             place.at = None;
         }
         view.shown = 0;
         return;
     };
+
+    // Where the interest is: a point on the ground, which only Shift and the pointer move.
+    //
+    // A point on the ground and not a point on the screen, which is what this was. A screen
+    // point stays where it is while the terrain slides under it, so turning the camera swept the
+    // choice across the landscape and the photographs reshuffled themselves for a gesture that
+    // was never about them. Anchored to the ground, flying about changes nothing: the cards you
+    // asked for stay the cards you have until you ask for others.
+    //
+    // Shift reads the same terrain pick a Ctrl+click places a marker on, so what it chooses is
+    // the ground under the pointer. Over sky, or with the pick not yet in, the last choice
+    // stands. The first one is the ground under the camera, because something has to be.
+    let asking = keys.any_pressed([KeyCode::ShiftLeft, KeyCode::ShiftRight]);
+    if let (true, Some(picked)) = (asking, picked) {
+        *focus = Some(picked);
+    }
+    let focus = *focus.get_or_insert_with(|| {
+        let unit = unit_under(camera_position);
+
+        TerrainShape::WGS84.position_unit_to_local(unit, 0.0)
+    });
 
     // Who is even a candidate, and what the layout needs to know about each.
     let mut candidates: Vec<Candidate> = Vec::new();
@@ -258,7 +291,7 @@ pub(super) fn place_cards(
         let Some(entity) = marker.card else {
             continue;
         };
-        let Ok((_, _, _, place)) = cards.get(entity) else {
+        let Ok((_, _, _, _, place)) = cards.get(entity) else {
             continue;
         };
         let Some(anchor) = viewport_position(
@@ -273,90 +306,92 @@ pub(super) fn place_cards(
         };
 
         candidates.push(Candidate {
+            id: marker.id,
             anchor,
             size: card_size(markers.card_pixels, marker.aspect),
-            distance: camera_position.distance(marker.at),
+            nearness: marker.at.distance(focus),
             selected: Some(index) == markers.selected,
-            was: place.side,
+            at: place.at.map(|at| at.center().y),
         });
         of_marker.push(index);
     }
 
-    let columns = columns(viewport, markers.card_pixels, panel.iter().next());
-    let cursor = window
-        .single()
-        .ok()
-        .and_then(|window| window.cursor_position());
+    // The panel's footprint, in the logical pixels everything else here is in, and only while
+    // it is actually on screen.
+    //
+    // Two traps in one line. ComputedNode is measured in physical pixels — inverse_scale_factor
+    // is what Bevy hands over to convert back — while the viewport, the margins and the cursor
+    // are all logical, so on a scaled window the untouched rect is both too big and too far
+    // down and right to overlap anything. And Bevy lays a node out whether or not it is drawn,
+    // so a panel hidden by Visibility still has a full-sized node: without the gate, the state
+    // whose whole point is to hand the corner back would go on reserving it.
+    let panel = markers
+        .showing
+        .editing()
+        .then(|| panel.iter().next())
+        .flatten()
+        .map(|(node, transform)| {
+            let scale = node.inverse_scale_factor();
 
-    // The circle is wider for a column it has already pushed something out of, so the pointer has
-    // to retreat further to let the cards back than it took to move them. Without that a card on
-    // the boundary flickers as the pointer jitters by a pixel.
-    let mut keep_out = [KEEP_OUT; 2];
-    for (slot, radius) in keep_out.iter_mut().enumerate() {
-        if engaged[slot] {
-            *radius += KEEP_OUT_LEAVE;
-        }
-        engaged[slot] = cursor.is_some_and(|cursor| {
-            let span = column_span(&columns[slot], markers.card_pixels);
-            layout::forbidden_band(cursor, *radius, span).is_some()
+            Rect::from_center_size(transform.translation * scale, node.size() * scale)
         });
-    }
 
-    let placements = layout::lay_out(&candidates, &columns, viewport.x / 2.0, cursor, &keep_out);
+    let columns = columns(viewport, markers.card_pixels, panel);
+    // The order each column was in last frame, so that it only changes when the cards do.
+    let (placements, settled) = layout::lay_out(&candidates, &columns, &order, time.delta_secs());
+    *order = settled;
 
     view.shown = placements.len();
 
-    // Everything with a placement is moved towards it; everything else is put away.
-    let mut placed = vec![None; candidates.len()];
+    // Keyed by the card's own entity, because what comes next has to be a loop over every card
+    // there is rather than over the ones that got a place.
+    //
+    // A marker drops out of the candidates for three ordinary reasons: it went off the screen,
+    // it went over the horizon, or a nearer marker took the last room in its column. Walking the
+    // placements would visit none of those, and their cards would stay exactly where they last
+    // were, at the size they last were, while the layout went on arranging the others around
+    // them. That is what put a stray card across the middle of the viewport.
+    let mut placed: HashMap<Entity, (&layout::Placement, usize)> = HashMap::new();
     for placement in &placements {
-        placed[placement.index] = Some(placement);
+        let marker = of_marker[placement.index];
+        if let Some(entity) = markers.markers[marker].card {
+            placed.insert(entity, (placement, marker));
+        }
     }
 
-    let delta = time.delta_secs();
-    for (candidate, marker) in of_marker.iter().copied().enumerate() {
-        let Some(entity) = markers.markers[marker].card else {
-            continue;
-        };
-        let Ok((mut node, mut visibility, mut outline, mut place)) = cards.get_mut(entity) else {
-            continue;
-        };
-        let Some(placement) = placed[candidate] else {
+    for (entity, mut node, mut visibility, mut outline, mut place) in &mut cards {
+        let Some(&(placement, marker)) = placed.get(&entity) else {
             visibility.set_if_neq(Visibility::Hidden);
             place.at = None;
             continue;
         };
 
+        // Already eased, and already swept clear of its neighbours at that eased height: what
+        // the layout hands back is where to draw this frame, not where it is headed.
         let size = placement.rect.size();
-        let target = placement.rect.min;
-        let at = match place.at {
-            Some(at) => layout::ease(at, target, delta),
-            None => target,
-        };
-        place.at = Some(at);
-        place.size = size;
-        place.side = Some(placement.side);
+        place.at = Some(placement.rect);
 
         node.width = Val::Px(size.x);
         node.height = Val::Px(size.y);
-        node.left = Val::Px(at.x);
-        node.top = Val::Px(at.y);
+        node.left = Val::Px(placement.rect.min.x);
+        node.top = Val::Px(placement.rect.min.y);
         node.border_radius = BorderRadius::all(Val::Px(corner_radius(markers.corner_radius, size)));
 
-        outline.color = match markers.selected == Some(marker) {
-            true => SELECTION_COLOUR,
-            false => Color::NONE,
+        // The frame matches this marker's tether in both colour and weight, and gives both up
+        // for cream and the slider's width while it is the selected one.
+        let (width, colour) = match markers.selected == Some(marker) {
+            true => (markers.selected_width, CREAM),
+            false => (TETHER_WIDTH, seasons.colour_of(&markers.markers[marker])),
         };
+        outline.width = Val::Px(width);
+        outline.color = colour;
         visibility.set_if_neq(Visibility::Visible);
     }
 }
 
 /// The two columns the cards stack in: inset from the edges of the viewport, and on the right
 /// stopping above the F10 panel rather than running under it.
-fn columns(
-    viewport: Vec2,
-    widest: f32,
-    panel: Option<(&ComputedNode, &UiGlobalTransform)>,
-) -> [Column; 2] {
+pub(super) fn columns(viewport: Vec2, widest: f32, panel: Option<Rect>) -> [Column; 2] {
     let (top, bottom) = (EDGE_MARGIN, viewport.y - EDGE_MARGIN);
     let left = Column {
         side: Side::Left,
@@ -374,10 +409,7 @@ fn columns(
     // The panel is the one piece of furniture the viewport already has. Only a column it actually
     // overlaps is shortened, so a narrow window that puts the panel clear of the cards loses
     // nothing.
-    if let Some((node, transform)) = panel {
-        let size = node.size();
-        let centre = transform.translation;
-        let panel = Rect::from_center_size(centre, size);
+    if let Some(panel) = panel {
         let span = column_span(&right, widest);
 
         if panel.max.x >= span.0 && panel.min.x <= span.1 {
@@ -388,8 +420,8 @@ fn columns(
     [left, right]
 }
 
-/// The horizontal stretch a column's cards can cover, taking the widest card they could be. The
-/// cursor's circle is measured against this, and so is the panel's corner.
+/// The horizontal stretch a column's cards can cover, taking the widest card they could be,
+/// which is what the panel's corner is measured against.
 fn column_span(column: &Column, widest: f32) -> (f32, f32) {
     match column.side {
         Side::Left => (column.outer, column.outer + widest),
@@ -397,26 +429,26 @@ fn column_span(column: &Column, widest: f32) -> (f32, f32) {
     }
 }
 
-/// Selects a marker when its card is pressed.
+/// The marker whose card a click at this point lands on, if any.
 ///
-/// On the press rather than the release, because a card does not block the pointer and a drag
-/// begun on one is the camera's pan: waiting for a release that may land anywhere would mean
-/// deciding afterwards whether the gesture had been a click, which the scene's own clicks need
-/// and a button does not.
-pub(super) fn select_on_click(
-    mut markers: ResMut<PhotoMarkers>,
-    cards: Query<(&MarkerCard, &Interaction), Changed<Interaction>>,
-) {
-    for (card, interaction) in &cards {
-        if *interaction != Interaction::Pressed {
-            continue;
-        }
-        let Some(index) = markers.index_of(card.0) else {
-            continue;
-        };
-
-        markers.select(index);
-    }
+/// Cards never overlap, which the layout engine guarantees, so at most one can contain a point
+/// and the first found is the answer. Fifty rectangles is nothing to walk.
+///
+/// This rather than Bevy's `Interaction`, which would seem the obvious way round. Two reasons.
+/// The cards sit at the bottom of the UI stack so that a photograph never covers a panel, and
+/// `ui_focus_system` gives the press to the topmost node under the pointer and stops there, so
+/// anything at all drawn over a card swallows the click meant for it. And `Interaction` presses
+/// on the way down, where everything else this plugin picks is decided on the way up, through
+/// the editor's click rules, so that a press and a drag are told apart.
+///
+/// A card does block the pointer, which is what keeps a drag across one from swinging the
+/// planet under it. That blocking would also throw the selecting press away, so edit_with_mouse
+/// asks this first and does not count a press over one of our own cards as the UI's.
+pub(super) fn card_under(cards: &[(usize, Rect)], cursor: Vec2) -> Option<usize> {
+    cards
+        .iter()
+        .find(|(_, rect)| rect.contains(cursor))
+        .map(|&(index, _)| index)
 }
 
 /// Puts a decoded photo on a card, and takes the card's shape from it.

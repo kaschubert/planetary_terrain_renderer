@@ -23,13 +23,24 @@ use bevy::prelude::*;
 use bevy_terrain::prelude::OrbitalCameraController;
 use big_space::prelude::Grids;
 
-use super::card::{CardPlace, viewport_position};
-use super::{MarkerCamera, PhotoMarkerGizmos, PhotoMarkers};
+use super::card::{CREAM, CardPlace, viewport_position};
+use super::{MarkerCamera, PhotoMarkerGizmos, PhotoMarkers, SelectedMarkerGizmos};
 
-/// How wide the tether is drawn, in pixels. One number for the whole gizmo group, so the dots are
-/// drawn at this too; a ribbon that widens at the card and comes to a point at the dot needs a
-/// mesh of its own, which is not what this is yet.
+/// How wide a tether and a dot are drawn, in pixels, for every marker but the selected one.
+/// Fixed, and not on a slider: what is worth setting by eye is how far the one being worked on
+/// stands out from the rest, and moving the rest with it is moving the wrong thing.
+///
+/// The dots take it too, since a gizmo's width is one number for a whole config group. A ribbon
+/// that widens at the card and comes to a point at the dot needs a mesh of its own, which is
+/// not what this is yet.
 pub(super) const TETHER_WIDTH: f32 = 3.0;
+
+/// How heavy the selected marker is drawn, in pixels, where the panel's slider starts and the
+/// range it covers. One number for its tether, its dot, the ring round it and the frame round
+/// its card, so the marker being worked on gains weight in every part of itself at once.
+pub(super) const SELECTED_WIDTH: f32 = 6.0;
+pub(super) const MIN_WIDTH: f32 = 1.0;
+pub(super) const MAX_WIDTH: f32 = 16.0;
 
 /// A pixel of slack on the erosion, because the card's edge is antialiased and a cap exactly
 /// tangent to the border would show as a hairline seam along it.
@@ -172,11 +183,17 @@ pub(super) fn distance_to(point: Vec2, centre: Vec2, half: Vec2, radius: f32) ->
 /// Draws a tether from every card on screen to the mark on the ground it is about.
 ///
 /// Only cards: a marker with no card has nothing for a tether to come from, and its dot says
-/// where it is on its own. The colour is the marker's, which is what the eight presets paint now
-/// that there is no plate to paint.
+/// where it is on its own.
+///
+/// The colour is the marker's, which is what the eight presets paint now that there is no plate
+/// to paint — except for the selected one, whose tether is cream like its frame and its ring.
+/// Selection is said in one colour throughout, so the whole of the marker you are working on
+/// stands away from the rest at a glance.
 pub(super) fn draw_tethers(
     mut gizmos: Gizmos<PhotoMarkerGizmos>,
+    mut bold: Gizmos<SelectedMarkerGizmos>,
     markers: Res<PhotoMarkers>,
+    seasons: Res<super::season::Seasons>,
     grids: Grids,
     camera: Query<MarkerCamera, With<OrbitalCameraController>>,
     cards: Query<(&CardPlace, &Visibility)>,
@@ -194,7 +211,7 @@ pub(super) fn draw_tethers(
     let cell_origin = grid.cell_to_float(camera.cell);
     let camera_position = grid.grid_position_double(camera.cell, camera.transform);
 
-    for marker in &markers.markers {
+    for (index, marker) in markers.markers.iter().enumerate() {
         let Some(entity) = marker.card else {
             continue;
         };
@@ -221,7 +238,10 @@ pub(super) fn draw_tethers(
             .into_iter()
             .filter_map(|point| unproject(point, camera.camera, camera.global));
 
-        gizmos.linestrip(points, Color::from(marker.colour));
+        match Some(index) == markers.selected {
+            true => bold.linestrip(points, CREAM),
+            false => gizmos.linestrip(points, seasons.colour_of(marker)),
+        }
     }
 }
 

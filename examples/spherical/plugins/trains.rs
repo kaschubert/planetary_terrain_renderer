@@ -35,6 +35,7 @@ use super::track_frames::{
     TRACK_CENTRES, TrackFrame, TrackSpline, TrackSplines, in_grid, offset, refresh_track_splines,
     reversed,
 };
+use bevy::math::DVec3;
 use bevy::{prelude::*, text::FontSize, ui::UiSystems, ui::widget::TextUiWriter};
 use bevy_terrain::prelude::*;
 use big_space::prelude::{CellCoord, Grids};
@@ -118,9 +119,14 @@ impl Plugin for TrainsPlugin {
 /// The trains and the switch that shows them.
 #[derive(Resource)]
 pub struct Trains {
-    /// Toggled by F7. Off, the carriages and labels are hidden and the trains drive on.
-    /// Shown only while the lines are, as the frames and the discs are: F4 hides everything
-    /// on the network.
+    /// Toggled by F7, and off until it is pressed. Off, the carriages and labels are hidden
+    /// and the trains drive on. Shown only while the lines are, as the frames and the discs
+    /// are: F4 hides everything on the network.
+    ///
+    /// Off to begin with because a carriage on every line is a great deal of the view to spend
+    /// on something not being worked on, and most of what the example is opened for is not the
+    /// trains. The stand-ins still start and still drive, so F7 shows a network already running
+    /// rather than one that begins the moment it is looked at.
     pub shown: bool,
     /// Metres per second, for every stand-in: TRAIN_SPEED.
     pub speed: f64,
@@ -141,7 +147,7 @@ pub struct Trains {
 impl Default for Trains {
     fn default() -> Self {
         Self {
-            shown: true,
+            shown: false,
             speed: TRAIN_SPEED,
             trains: Vec::new(),
             live: false,
@@ -610,3 +616,63 @@ fn label_trains(
 
 #[cfg(test)]
 mod tests;
+
+/// How near a carriage the cursor has to be to count as on it, in pixels, for a carriage drawn
+/// too small for its own length to give a reach. The editor's discs use ten for a point a few
+/// pixels across, and a distant train is one of those.
+const PICK_PIXELS: f32 = 12.0;
+
+/// The carriage nearest the cursor on screen and where it stands, if the cursor is on one. The
+/// reach is half the carriage's own length on screen, so a train filling the view can be hit
+/// anywhere along it and a distant one still takes a deliberate click.
+#[allow(clippy::too_many_arguments)]
+pub fn carriage_under(
+    trains: &Trains,
+    splines: &TrackSplines,
+    camera: &Camera,
+    camera_global: &GlobalTransform,
+    cell_origin: DVec3,
+    camera_position: DVec3,
+    cursor: Vec2,
+) -> Option<(Entity, DVec3)> {
+    let mut nearest: Option<(Entity, DVec3, f32)> = None;
+
+    for train in &trains.trains {
+        let Some(carriage) = train.entity else {
+            continue;
+        };
+        let Some(spline) = splines.splines.get(train.line).and_then(Option::as_ref) else {
+            continue;
+        };
+
+        let frame = carriage_frame(spline, train);
+        // The middle of the carriage's side, which is what a click at a train aims at.
+        let middle = frame.position + frame.up() * (CARRIAGE_HEIGHT as f64 / 2.0);
+        let Ok(on_screen) =
+            camera.world_to_viewport(camera_global, (middle - cell_origin).as_vec3())
+        else {
+            continue;
+        };
+
+        // Over the horizon the planet hides the carriage, though it still projects onto the
+        // screen; the labels test their roof the same way.
+        if (camera_position - middle).dot(middle) < 0.0 {
+            continue;
+        }
+
+        let Ok(nose) = camera.world_to_viewport(
+            camera_global,
+            (middle + frame.forward() * (CARRIAGE_LENGTH as f64 / 2.0) - cell_origin).as_vec3(),
+        ) else {
+            continue;
+        };
+
+        let reach = PICK_PIXELS.max(on_screen.distance(nose));
+        let distance = on_screen.distance(cursor);
+        if distance <= reach && nearest.is_none_or(|(_, _, best)| distance < best) {
+            nearest = Some((carriage, frame.position, distance));
+        }
+    }
+
+    nearest.map(|(carriage, position, _)| (carriage, position))
+}

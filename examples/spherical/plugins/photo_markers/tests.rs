@@ -412,13 +412,15 @@ fn a_card_finds_its_marker_by_id_and_not_by_index() {
 // The layout engine. A viewport 1200 by 800, which is the shape of the window the example opens
 // at, and cards of one size unless a test wants otherwise.
 
-use super::layout::{
-    CARD_GAP, Candidate, Column, EDGE_MARGIN, KEEP_OUT, SIDE_BAND, Side, ease, forbidden_band,
-    lay_out,
-};
+use super::layout::{CARD_GAP, Candidate, Column, EDGE_MARGIN, Side, ease, lay_out};
 
 const VIEWPORT: Vec2 = Vec2::new(1200.0, 800.0);
+/// A landscape card and an upright one, which is what decides a card's column.
 const CARD: Vec2 = Vec2::new(160.0, 120.0);
+const UPRIGHT: Vec2 = Vec2::new(120.0, 160.0);
+
+/// No order from a frame before, which makes the engine settle one from the anchors.
+const NOTHING_HELD: [Vec<MarkerId>; 2] = [Vec::new(), Vec::new()];
 
 fn columns() -> [Column; 2] {
     [
@@ -438,35 +440,53 @@ fn columns() -> [Column; 2] {
 }
 
 fn at(x: f32, y: f32) -> Candidate {
+    // The id matters only to the order-holding, which the tests that care about it set.
     Candidate {
+        id: MarkerId(0),
         anchor: Vec2::new(x, y),
         size: CARD,
-        distance: 1000.0,
+        // Every card the same distance from the point of interest unless a test says otherwise,
+        // so that only the thing under test decides who keeps a card.
+        nearness: 1000.0,
         selected: false,
-        was: None,
+        at: None,
+    }
+}
+
+/// The same with an upright photograph on it, which sends it to the other column.
+fn upright(x: f32, y: f32) -> Candidate {
+    Candidate {
+        size: UPRIGHT,
+        ..at(x, y)
     }
 }
 
 /// The layout with nothing in the way: no cursor, and the circle never consulted.
 fn settled(candidates: &[Candidate]) -> Vec<super::layout::Placement> {
-    lay_out(
-        candidates,
-        &columns(),
-        VIEWPORT.x / 2.0,
-        None,
-        &[KEEP_OUT, KEEP_OUT],
-    )
+    // No order held, so every call settles one afresh. A sixtieth of a second, as a frame is;
+    // with every card already where it belongs, which `at: None` says, the easing has nothing to
+    // do and the answer is the resting one.
+    lay_out(candidates, &columns(), &NOTHING_HELD, 1.0 / 60.0).0
+}
+
+/// Numbered, so that a test can tell one card from another across frames.
+fn numbered(index: u32, x: f32, y: f32) -> Candidate {
+    Candidate {
+        id: MarkerId(index),
+        ..at(x, y)
+    }
 }
 
 #[test]
-fn a_card_goes_to_the_side_its_marker_is_on_and_hugs_that_edge() {
-    let placements = settled(&[at(200.0, 300.0), at(1000.0, 300.0)]);
+fn a_card_goes_to_the_side_its_photograph_is_shaped_for_and_hugs_that_edge() {
+    // Two marks in the same place: only the shape of the photograph decides the column.
+    let placements = settled(&[at(600.0, 300.0), upright(600.0, 300.0)]);
 
     let left = placements.iter().find(|p| p.index == 0).expect("placed");
     let right = placements.iter().find(|p| p.index == 1).expect("placed");
 
-    assert_eq!(left.side, Side::Left);
-    assert_eq!(right.side, Side::Right);
+    assert_eq!(left.side, Side::Left, "a landscape photograph goes left");
+    assert_eq!(right.side, Side::Right, "an upright one goes right");
     assert!((left.rect.min.x - EDGE_MARGIN).abs() < 1e-3, "{left:?}");
     assert!(
         (right.rect.max.x - (VIEWPORT.x - EDGE_MARGIN)).abs() < 1e-3,
@@ -534,22 +554,34 @@ fn every_card_stays_inside_its_column() {
 }
 
 #[test]
-fn the_nearest_keep_their_cards_when_there_is_no_room_for_all() {
-    // Six cards of 120 plus the gaps want 770 px; the column has 768.
-    let candidates: Vec<Candidate> = (0..6)
-        .map(|i| Candidate {
-            distance: 1000.0 - i as f64,
-            ..at(200.0, 100.0 + i as f32 * 120.0)
-        })
-        .collect();
+fn the_markers_nearest_the_point_of_interest_are_the_ones_that_keep_a_card() {
+    // Six cards of 120 plus the gaps want 770 px; the column has 768, so one must go.
+    let near_the_end = |i: usize| Candidate {
+        nearness: (5 - i) as f64 * 100.0,
+        ..at(200.0, 100.0 + i as f32 * 120.0)
+    };
+    let candidates: Vec<Candidate> = (0..6).map(near_the_end).collect();
 
+    // The first is the furthest from what was asked for, so it is the one left out.
     let placements = settled(&candidates);
     assert_eq!(placements.len(), 5, "one more than fits was placed");
-
-    // The one left out is the furthest, which is the first of them.
     assert!(
         !placements.iter().any(|placement| placement.index == 0),
-        "the furthest kept its card and a nearer one was dropped"
+        "the marker furthest from the point of interest kept its card"
+    );
+
+    // Ask somewhere else and the answer turns over: now the last one goes.
+    let candidates: Vec<Candidate> = (0..6)
+        .map(|i| Candidate {
+            nearness: i as f64 * 100.0,
+            ..near_the_end(i)
+        })
+        .collect();
+    let placements = settled(&candidates);
+    assert_eq!(placements.len(), 5);
+    assert!(
+        !placements.iter().any(|placement| placement.index == 5),
+        "the point of interest moved and the same marker was dropped"
     );
 }
 
@@ -557,8 +589,8 @@ fn the_nearest_keep_their_cards_when_there_is_no_room_for_all() {
 fn the_selected_card_is_never_the_one_left_out() {
     let candidates: Vec<Candidate> = (0..6)
         .map(|i| Candidate {
-            distance: 1000.0 - i as f64,
-            // The furthest of them, which is what the budget would otherwise drop first.
+            // The furthest from what was asked for, which the budget would drop first.
+            nearness: (5 - i) as f64 * 100.0,
             selected: i == 0,
             ..at(200.0, 100.0 + i as f32 * 120.0)
         })
@@ -573,91 +605,11 @@ fn the_selected_card_is_never_the_one_left_out() {
 }
 
 #[test]
-fn a_marker_near_the_middle_keeps_the_side_it_had() {
-    let middle = VIEWPORT.x / 2.0;
-    // Just over the line into the right half, but within the dead band.
-    let drifted = Candidate {
-        was: Some(Side::Left),
-        ..at(middle + SIDE_BAND / 4.0, 300.0)
-    };
-    assert_eq!(settled(&[drifted])[0].side, Side::Left);
-
-    // Past the band it does change sides, so the band is a hesitation and not a lock.
-    let crossed = Candidate {
-        was: Some(Side::Left),
-        ..at(middle + SIDE_BAND, 300.0)
-    };
-    assert_eq!(settled(&[crossed])[0].side, Side::Right);
-
-    // And a card with no history simply takes the half it is in.
-    assert_eq!(settled(&[at(middle + 1.0, 300.0)])[0].side, Side::Right);
-}
-
-#[test]
-fn the_cursors_circle_forbids_the_chord_it_cuts_across_a_column() {
-    // Dead on the column, so the band is the full diameter.
-    let band = forbidden_band(Vec2::new(60.0, 300.0), 140.0, (16.0, 176.0)).expect("a band");
-    assert!(
-        (band.0 - 160.0).abs() < 1e-3 && (band.1 - 440.0).abs() < 1e-3,
-        "{band:?}"
-    );
-
-    // Off to one side, so only the chord: 140 across, 100 away, leaves a half-chord of about 98.
-    let band = forbidden_band(Vec2::new(276.0, 300.0), 140.0, (16.0, 176.0)).expect("a band");
-    let half = (140.0f32 * 140.0 - 100.0 * 100.0).sqrt();
-    assert!((band.0 - (300.0 - half)).abs() < 1e-3, "{band:?}");
-}
-
-#[test]
-fn a_circle_that_does_not_reach_the_column_forbids_nothing() {
-    assert_eq!(
-        forbidden_band(Vec2::new(400.0, 300.0), 140.0, (16.0, 176.0)),
-        None
-    );
-    // And exactly at the radius it is still clear, so the band is never a point.
-    assert_eq!(
-        forbidden_band(Vec2::new(316.0, 300.0), 140.0, (16.0, 176.0)),
-        None
-    );
-}
-
-#[test]
-fn a_card_is_pushed_out_of_the_cursors_way_and_back_again() {
-    let candidate = at(200.0, 250.0);
-    let cursor = Vec2::new(60.0, 300.0);
-
-    let pushed = lay_out(
-        &[candidate],
-        &columns(),
-        VIEWPORT.x / 2.0,
-        Some(cursor),
-        &[KEEP_OUT, KEEP_OUT],
-    );
-    let band = forbidden_band(cursor, KEEP_OUT, (EDGE_MARGIN, EDGE_MARGIN + CARD.x)).expect("band");
-
-    assert_eq!(pushed.len(), 1);
-    assert!(
-        pushed[0].rect.max.y <= band.0 + 1e-3,
-        "{:?} is still inside the band {band:?}",
-        pushed[0].rect
-    );
-
-    // With the pointer elsewhere it goes back to wanting its anchor's height.
-    let free = settled(&[candidate]);
-    assert!(
-        (free[0].rect.center().y - 250.0).abs() < 1e-3,
-        "{:?}",
-        free[0].rect
-    );
-}
-
-#[test]
 fn the_ease_closes_on_its_target_and_then_snaps_to_it() {
-    let target = Vec2::new(100.0, 400.0);
-    let mut at = Vec2::new(100.0, 0.0);
+    let (target, mut at) = (400.0f32, 0.0f32);
 
     let first = ease(at, target, 1.0 / 60.0);
-    assert!(first.y > at.y && first.y < target.y, "{first:?}");
+    assert!(first > at && first < target, "{first}");
 
     // A second of sixtieths gets there, and the last step is exact rather than asymptotic.
     for _ in 0..60 {
@@ -788,4 +740,490 @@ fn the_curve_runs_from_the_card_to_the_dot_and_leaves_the_way_the_border_faces()
     // And it arrives from above, which is what makes it rise out of the mark on the ground.
     let last = (points[points.len() - 1] - points[points.len() - 2]).normalize();
     assert!(last.y > 0.5, "the tether comes into the dot at {last:?}");
+}
+
+// The scatter button: the folder it reads and the disc it lays markers in.
+
+use super::scatter::{Scatter, photos_in, placed_unit, spread_at};
+
+#[test]
+fn the_panel_says_what_the_scatter_would_draw_on() {
+    let mut scatter = Scatter::default();
+    assert_eq!(scatter.caption(), "no folder chosen");
+    assert!(!scatter.ready(), "nothing to scatter from yet");
+
+    scatter.folder = Some(PathBuf::from("/home/kai/Pictures/piha"));
+    assert_eq!(scatter.caption(), "piha: no photos this build can read");
+    assert!(!scatter.ready(), "a folder with no photos is not ready");
+
+    scatter.photos = vec![PathBuf::from("a.jpg")];
+    assert_eq!(scatter.caption(), "piha: 1 photo");
+    assert!(scatter.ready());
+
+    scatter.photos.push(PathBuf::from("b.png"));
+    assert_eq!(scatter.caption(), "piha: 2 photos");
+
+    // And the one case that is not about the folder at all.
+    let scatter = Scatter {
+        no_chooser: true,
+        ..default()
+    };
+    assert_eq!(
+        scatter.caption(),
+        "no zenity or kdialog to choose a folder with"
+    );
+}
+
+#[test]
+fn only_the_readable_photos_in_a_folder_are_taken_and_in_name_order() {
+    let folder = std::env::temp_dir().join("photo-markers-test-scatter");
+    let _ = std::fs::remove_dir_all(&folder);
+    std::fs::create_dir_all(&folder).expect("the temporary folder is writable");
+    for name in ["b.jpg", "a.png", "notes.txt", "clip.webp"] {
+        std::fs::write(folder.join(name), b"not really an image").expect("writable");
+    }
+    std::fs::create_dir_all(folder.join("subfolder")).expect("writable");
+
+    let photos = photos_in(&folder);
+    let names: Vec<String> = photos
+        .iter()
+        .map(|path| path.file_name().unwrap().to_string_lossy().to_string())
+        .collect();
+
+    // The two this build decodes, in name order, and neither the text file, the format it has
+    // no codec for, nor the folder.
+    assert_eq!(names, vec!["a.png", "b.jpg"]);
+
+    let _ = std::fs::remove_dir_all(&folder);
+}
+
+#[test]
+fn a_scatter_lands_inside_its_own_spread_and_spreads_with_the_altitude() {
+    let unit = auckland();
+    let frame = Frame::at_unit(unit);
+    let ground = TerrainShape::WGS84.position_unit_to_local(unit, 0.0);
+
+    // Dead centre is the point under the camera itself.
+    let middle = placed_unit(ground, &frame, 0.0, 0.0);
+    assert!(middle.distance(unit) < 1e-12, "{middle:?}");
+
+    let spread = spread_at(10_000.0);
+    for step in 0..16 {
+        let angle = step as f64 * std::f64::consts::TAU / 16.0;
+        let placed = placed_unit(ground, &frame, spread, angle);
+        let away = TerrainShape::WGS84
+            .position_unit_to_local(placed, 0.0)
+            .distance(ground);
+
+        // On the ellipsoid rather than the tangent plane, so a little short of the radius laid
+        // out, and never past it.
+        assert!(
+            away <= spread + 1.0 && away > spread * 0.99,
+            "{away} m away, wanted about {spread}"
+        );
+    }
+}
+
+#[test]
+fn the_scatter_is_as_wide_as_the_view_and_never_a_single_point() {
+    // Four tenths of the altitude, so a press from a kilometre up fills a kilometre of ground.
+    assert!((spread_at(10_000.0) - 4_000.0).abs() < 1e-6);
+    // And from the deck it is still wide enough that the markers are not all on one spot.
+    assert!(spread_at(0.0) >= 200.0);
+}
+
+#[test]
+fn f10_opens_for_work_then_stands_back_then_puts_away() {
+    let showing = Showing::default();
+    assert_eq!(showing, Showing::Nothing);
+    assert!(!showing.cards(), "nothing is drawn to begin with");
+    assert!(!showing.editing());
+
+    // A press from cold goes straight to the working state, as the toggle used to.
+    let showing = showing.next();
+    assert_eq!(showing, Showing::Editing);
+    assert!(showing.cards() && showing.editing());
+
+    // The middle state is the point of the cycle: the photographs stay, and nothing claims the
+    // keys that destroy something or the corner the rail editor wants.
+    let showing = showing.next();
+    assert_eq!(showing, Showing::Photos);
+    assert!(showing.cards(), "the photographs stay");
+    assert!(!showing.editing(), "but it is no longer editing");
+
+    assert_eq!(showing.next(), Showing::Nothing);
+}
+
+#[test]
+fn a_card_in_flight_never_laps_the_one_it_is_moving_past() {
+    // Four cards whose anchors have just jumped to the other end of the column, which is what a
+    // turn of the camera does. Every one of them is a long way from where it now belongs.
+    let anchors = [700.0, 730.0, 760.0, 790.0];
+    let mut places = [60.0f32, 200.0, 340.0, 480.0];
+
+    // Half a second of frames, which is several times the easing's own constant.
+    for _ in 0..30 {
+        let candidates: Vec<Candidate> = anchors
+            .iter()
+            .zip(places)
+            .map(|(&y, place)| Candidate {
+                at: Some(place),
+                ..at(200.0, y)
+            })
+            .collect();
+
+        let mut drawn = lay_out(&candidates, &columns(), &NOTHING_HELD, 1.0 / 60.0).0;
+        assert_eq!(drawn.len(), 4);
+        drawn.sort_by(|a, b| a.rect.min.y.total_cmp(&b.rect.min.y));
+
+        // The gaps hold on every frame of the move, not only once it has finished. This is the
+        // whole reason the easing lives inside the engine.
+        for pair in drawn.windows(2) {
+            let clear = pair[1].rect.min.y - pair[0].rect.max.y;
+            assert!(clear >= CARD_GAP - 1e-3, "only {clear} px apart mid-move");
+        }
+
+        for placement in &drawn {
+            // And a card is always flush to its column, so nothing flies across the viewport.
+            assert!(
+                (placement.rect.min.x - EDGE_MARGIN).abs() < 1e-3,
+                "{:?} has left its column",
+                placement.rect
+            );
+            places[placement.index] = placement.rect.center().y;
+        }
+    }
+
+    // And they do arrive. Four cards of 120 with 10 between them is a stack 510 tall, so they
+    // cannot all sit on their anchors; what they can do is get there, which from 60 they have.
+    assert!(places[0] > 300.0, "nothing moved: {places:?}");
+    for pair in places.windows(2) {
+        assert!(
+            (pair[1] - pair[0] - (CARD + Vec2::splat(CARD_GAP)).y).abs() < 1.0,
+            "the stack has not closed up: {places:?}"
+        );
+    }
+}
+
+#[test]
+fn the_right_column_stops_above_the_panel_and_only_when_it_is_really_there() {
+    let widest = CARD.x;
+    let full = VIEWPORT.y - EDGE_MARGIN;
+
+    // No panel at all, which is every state but the editing one: the columns run the full drop.
+    let [left, right] = super::card::columns(VIEWPORT, widest, None);
+    assert_eq!((left.bottom, right.bottom), (full, full));
+
+    // A panel in the bottom right corner, given in the same logical pixels the columns are in.
+    let panel = Rect::from_corners(Vec2::new(820.0, 500.0), Vec2::new(1184.0, 784.0));
+    let [left, right] = super::card::columns(VIEWPORT, widest, Some(panel));
+    assert_eq!(
+        right.bottom,
+        500.0 - CARD_GAP,
+        "the right column runs under the panel"
+    );
+    assert_eq!(
+        left.bottom, full,
+        "and the left one is none of its business"
+    );
+
+    // One that does not reach the column leaves it alone, so a narrow panel costs nothing.
+    let clear = Rect::from_corners(Vec2::new(200.0, 500.0), Vec2::new(600.0, 784.0));
+    let [_, right] = super::card::columns(VIEWPORT, widest, Some(clear));
+    assert_eq!(right.bottom, full);
+}
+
+#[test]
+fn a_click_on_a_card_picks_that_marker_and_a_click_past_them_picks_none() {
+    use super::card::card_under;
+
+    // Two cards down the left margin, as the layout puts them.
+    let drawn = [
+        (
+            3,
+            Rect::from_corners(Vec2::new(16.0, 16.0), Vec2::new(176.0, 136.0)),
+        ),
+        (
+            7,
+            Rect::from_corners(Vec2::new(16.0, 146.0), Vec2::new(176.0, 266.0)),
+        ),
+    ];
+
+    assert_eq!(card_under(&drawn, Vec2::new(90.0, 70.0)), Some(3));
+    assert_eq!(card_under(&drawn, Vec2::new(90.0, 200.0)), Some(7));
+
+    // The gap between them belongs to neither, and so does the terrain beside them.
+    assert_eq!(card_under(&drawn, Vec2::new(90.0, 141.0)), None);
+    assert_eq!(card_under(&drawn, Vec2::new(400.0, 70.0)), None);
+
+    // The marker is named by its index in the list, not by where it sits in the column: the
+    // second card down is marker 7, and a click on it must not come back as marker 1.
+    assert_eq!(card_under(&drawn, Vec2::new(20.0, 150.0)), Some(7));
+}
+
+#[test]
+fn the_slider_sets_the_selected_marker_alone_and_always_above_the_rest() {
+    use super::tether::{MAX_WIDTH, MIN_WIDTH, SELECTED_WIDTH, TETHER_WIDTH};
+
+    // The slider starts where the constant does, so the panel reads as what is drawn.
+    assert!(MIN_WIDTH <= SELECTED_WIDTH && SELECTED_WIDTH <= MAX_WIDTH);
+
+    // It can be taken under the width everything else is drawn at. That is allowed on purpose:
+    // the honest way to find out whether the selected marker wants to be heavier at all is to
+    // be able to make it lighter. The default stands well clear of it.
+    assert!(
+        MIN_WIDTH < TETHER_WIDTH,
+        "the range cannot reach below the rest"
+    );
+    assert!(
+        SELECTED_WIDTH > TETHER_WIDTH,
+        "the selected marker does not start out bolder than the others"
+    );
+}
+
+#[test]
+fn the_two_columns_hold_the_two_shapes_and_nothing_mixes() {
+    // Marks scattered anywhere, shapes alternating: where a mark is must not matter any more.
+    let candidates: Vec<Candidate> = (0..6)
+        .map(|i| {
+            let (x, y) = (100.0 + i as f32 * 180.0, 100.0 + i as f32 * 90.0);
+            match i % 2 {
+                0 => at(x, y),
+                _ => upright(x, y),
+            }
+        })
+        .collect();
+
+    for placement in settled(&candidates) {
+        let size = candidates[placement.index].size;
+        let wanted = match size.x >= size.y {
+            true => Side::Left,
+            false => Side::Right,
+        };
+        assert_eq!(
+            placement.side, wanted,
+            "a {size:?} card went to the {:?} column",
+            placement.side
+        );
+    }
+}
+
+#[test]
+fn the_order_holds_while_the_cards_do_and_settles_again_when_they_change() {
+    let frame = |candidates: &[Candidate], held: &[Vec<MarkerId>; 2]| {
+        let (mut placements, order) = lay_out(candidates, &columns(), held, 1.0 / 60.0);
+        placements.sort_by(|a, b| a.rect.min.y.total_cmp(&b.rect.min.y));
+
+        (
+            placements
+                .iter()
+                .map(|placement| candidates[placement.index].id)
+                .collect::<Vec<_>>(),
+            order,
+        )
+    };
+
+    // Three cards, settled from their anchors: top to bottom they are 0, 1, 2.
+    let first = [
+        numbered(0, 200.0, 100.0),
+        numbered(1, 200.0, 300.0),
+        numbered(2, 200.0, 500.0),
+    ];
+    let (down_the_column, held) = frame(&first, &NOTHING_HELD);
+    assert_eq!(down_the_column, vec![MarkerId(0), MarkerId(1), MarkerId(2)]);
+
+    // The camera turns and the marks swap over: 2 is now the highest and 0 the lowest. Nothing
+    // about which cards are shown has changed, so neither does the order they are shown in.
+    let turned = [
+        numbered(0, 200.0, 500.0),
+        numbered(1, 200.0, 300.0),
+        numbered(2, 200.0, 100.0),
+    ];
+    let (after, held) = frame(&turned, &held);
+    assert_eq!(
+        after,
+        vec![MarkerId(0), MarkerId(1), MarkerId(2)],
+        "the cards reordered themselves for a camera move"
+    );
+
+    // A fourth card arrives, which is a change of cast, and the order is settled afresh from
+    // where the marks now are.
+    let joined = [turned[0], turned[1], turned[2], numbered(3, 200.0, 650.0)];
+    let (resettled, _) = frame(&joined, &held);
+    assert_eq!(
+        resettled,
+        vec![MarkerId(2), MarkerId(1), MarkerId(0), MarkerId(3)],
+        "a new card should have settled the order from the anchors"
+    );
+}
+
+// The seasons: which one a photograph was taken in, and the colour that gives it.
+
+use super::season::{Season, Seasons, season_of, taken_in};
+
+/// Auckland is south of the equator and Hamburg north of it, which is the whole of the
+/// hemisphere question.
+const AUCKLAND_LATITUDE: f64 = -36.85;
+const HAMBURG_LATITUDE: f64 = 53.55;
+
+#[test]
+fn a_december_photograph_is_summer_in_auckland_and_winter_in_hamburg() {
+    assert_eq!(season_of(12, AUCKLAND_LATITUDE), Season::Summer);
+    assert_eq!(season_of(12, HAMBURG_LATITUDE), Season::Winter);
+
+    // And the other three, turned half a year round against each other.
+    for (month, north) in [
+        (4, Season::Spring),
+        (7, Season::Summer),
+        (10, Season::Autumn),
+        (1, Season::Winter),
+    ] {
+        assert_eq!(season_of(month, HAMBURG_LATITUDE), north);
+        let south = season_of(month, AUCKLAND_LATITUDE);
+        assert_ne!(south, north, "month {month} came out the same either side");
+    }
+}
+
+#[test]
+fn every_month_lands_in_a_season_on_both_sides_of_the_equator() {
+    for month in 1..=12 {
+        // Nothing to assert beyond its not panicking and the two differing: the point is that
+        // the arithmetic that turns the year round cannot fall off the end of it.
+        let south = season_of(month, AUCKLAND_LATITUDE);
+        let north = season_of(month, HAMBURG_LATITUDE);
+        assert_ne!(south, north, "month {month}");
+    }
+}
+
+#[test]
+fn the_month_comes_out_of_the_name_a_phone_gives_a_photograph() {
+    assert_eq!(taken_in(Path::new("/photos/20251212_173914.jpg")), Some(12));
+    assert_eq!(taken_in(Path::new("20260330_115408.jpg")), Some(3));
+
+    // Anything that is not a phone's date leaves the marker its own colour rather than a guess.
+    assert_eq!(taken_in(Path::new("piha.jpg")), None);
+    assert_eq!(taken_in(Path::new("1234.jpg")), None, "too few digits");
+    assert_eq!(
+        taken_in(Path::new("20251312_0000.jpg")),
+        None,
+        "no month 13"
+    );
+    assert_eq!(taken_in(Path::new("99999999.jpg")), None, "not a year");
+}
+
+#[test]
+fn the_palettes_in_the_repository_parse_and_hold_four_seasons_of_colours() {
+    let seasons = Seasons::load();
+    let mut marker = PhotoMarker {
+        id: MarkerId(0),
+        unit: auckland(),
+        ground: 0.0,
+        colour: DEFAULT_COLOUR,
+        photo: Some(PathBuf::from("/photos/20251212_173914.jpg")),
+        missing: false,
+        riding: None,
+        at: DVec3::ZERO,
+        aspect: EMPTY_ASPECT,
+        card: None,
+    };
+
+    // A December photograph of Auckland is a summer one, so it is not the default grey.
+    let summer = seasons.colour_of(&marker);
+    assert_ne!(summer, Color::from(DEFAULT_COLOUR), "no palette was found");
+
+    // The same photograph asked about twice is the same colour: the choice comes from the name,
+    // so it survives a save, a reload and a rebuild.
+    assert_eq!(seasons.colour_of(&marker), summer);
+
+    // The same file taken half a year away is a different season, so a different colour.
+    marker.photo = Some(PathBuf::from("/photos/20250612_173914.jpg"));
+    assert_ne!(seasons.colour_of(&marker), summer);
+
+    // And a photograph with no date in its name keeps the colour the sliders hold.
+    marker.photo = Some(PathBuf::from("/photos/piha.jpg"));
+    assert_eq!(seasons.colour_of(&marker), Color::from(DEFAULT_COLOUR));
+}
+
+#[test]
+fn the_whole_year_maps_the_way_the_two_hemispheres_do() {
+    use Season::{Autumn, Spring, Summer, Winter};
+
+    // The mapping in full, so that it is read off the test rather than worked out from the
+    // arithmetic. January to December, north and then south.
+    let wanted = [
+        (Winter, Summer),
+        (Winter, Summer),
+        (Spring, Autumn),
+        (Spring, Autumn),
+        (Spring, Autumn),
+        (Summer, Winter),
+        (Summer, Winter),
+        (Summer, Winter),
+        (Autumn, Spring),
+        (Autumn, Spring),
+        (Autumn, Spring),
+        (Winter, Summer),
+    ];
+
+    for (month, (north, south)) in wanted.into_iter().enumerate() {
+        let month = month as u32 + 1;
+        assert_eq!(
+            season_of(month, HAMBURG_LATITUDE),
+            north,
+            "month {month} north"
+        );
+        assert_eq!(
+            season_of(month, AUCKLAND_LATITUDE),
+            south,
+            "month {month} south"
+        );
+    }
+}
+
+#[test]
+fn no_season_is_drawn_in_a_colour_another_season_could_be_mistaken_for() {
+    // The file's palettes overlap: whole, the nearest pair across two seasons is summer's
+    // Driftwood and autumn's Faded Brick, eight parts in two hundred and fifty-five apart. What
+    // is drawn from is cut down to the swatches that keep their distance.
+    const APART: f32 = 0.15; // of the 0..1 sRGB range, which is about 38 of 255
+
+    let seasons = Seasons::load();
+    let mut closest = f32::INFINITY;
+    let mut pair = String::new();
+
+    for one in Season::ALL {
+        for other in Season::ALL {
+            if one == other {
+                continue;
+            }
+            for a in seasons.swatches(one) {
+                for b in seasons.swatches(other) {
+                    let (dr, dg, db) = (
+                        a.srgb.0 - b.srgb.0,
+                        a.srgb.1 - b.srgb.1,
+                        a.srgb.2 - b.srgb.2,
+                    );
+                    let distance = (dr * dr + dg * dg + db * db).sqrt();
+                    if distance < closest {
+                        closest = distance;
+                        pair = format!("{} ({one:?}) and {} ({other:?})", a.name, b.name);
+                    }
+                }
+            }
+        }
+    }
+
+    assert!(
+        closest >= APART,
+        "{pair} are only {closest:.3} apart, which reads as the same season"
+    );
+
+    // And each season still has something to choose from, or the colouring says nothing.
+    for season in Season::ALL {
+        assert!(
+            seasons.swatches(season).len() >= 3,
+            "{season:?} was cut to {} swatches",
+            seasons.swatches(season).len()
+        );
+    }
 }

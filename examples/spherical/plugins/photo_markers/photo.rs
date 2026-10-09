@@ -70,12 +70,18 @@ pub(super) fn receive_drops(
     mut drops: MessageReader<FileDragAndDrop>,
     markers: Res<PhotoMarkers>,
 ) {
+    // A marker holds one photograph, so a drop of several files is one intent however many
+    // files it carries. Decoding them all would put as many decodes on one card and let
+    // whichever finished last have it, which is to say at random; the last file of the drop
+    // wins instead, which is at least the same answer twice.
+    let mut wanted: Option<PathBuf> = None;
+
     for drop in drops.read() {
         let FileDragAndDrop::DroppedFile { path_buf, .. } = drop else {
             continue;
         };
 
-        let Some(marker) = markers.selected() else {
+        let Some(_) = markers.selected() else {
             warn!(
                 "photo markers: {} dropped with no marker selected; Ctrl+click the terrain to \
                  place one, or click one to select it",
@@ -89,9 +95,14 @@ pub(super) fn receive_drops(
             continue;
         }
 
-        start_decode(&mut commands, marker.id, path_buf.clone());
-        info!("photo markers: reading {}", name_of(path_buf));
+        wanted = Some(path_buf.clone());
     }
+
+    let (Some(path), Some(marker)) = (wanted, markers.selected()) else {
+        return;
+    };
+    info!("photo markers: reading {}", name_of(&path));
+    start_decode(&mut commands, marker.id, path);
 }
 
 /// Starts a decode for one marker, on the task pool, and leaves it on a throwaway entity for
@@ -126,10 +137,16 @@ pub(super) fn poll_photos(
                 // Said in the panel too, since a marker whose photo has moved comes back blank
                 // and the console scrolls away. The path is kept, so putting the file back and
                 // starting again is all it takes.
+                //
+                // Only when the file that would not read is the one the marker says it is
+                // showing. A photograph dropped on a marker that already has one is a different
+                // file, and its failing says nothing about the picture still on the card; the
+                // warning above has already said which file it was.
                 if let Some(marker) = markers
                     .markers
                     .iter_mut()
                     .find(|marker| marker.id == task.marker)
+                    && marker.photo.as_deref() == Some(task.path.as_path())
                 {
                     marker.missing = true;
                 }
@@ -194,7 +211,7 @@ pub(super) fn tint_on_hover(
         let Some(mut background) = marker.card.and_then(|card| cards.get_mut(card).ok()) else {
             continue;
         };
-        background.0 = tint.unwrap_or(card::EMPTY_CARD);
+        background.0 = tint.unwrap_or(card::CREAM);
     }
 }
 

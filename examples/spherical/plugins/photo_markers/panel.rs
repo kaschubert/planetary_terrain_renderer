@@ -1,7 +1,9 @@
 //! The F10 panel: which marker is selected, what colour it is, and how its card is drawn.
 //!
 //! Bottom right, in the F5 panel's style, and F10 stands the rail editor down as F5 stands this
-//! down, so the corner, Delete and Escape have one owner at a time. The buttons are Bevy's
+//! down, so the corner, Delete and Escape have one owner at a time. Only the editing state does
+//! that: F10 cycles through the photographs on their own as well, and that one gives the corner
+//! back, since the panel in it is the very thing in the way of what was opened to be looked at. The buttons are Bevy's
 //! Button with its Interaction, the pattern of the editor's panel and the overlay's copy button:
 //! one component names the action, one system acts on a press, one colours hover and press, and
 //! one dims what cannot apply.
@@ -14,13 +16,17 @@
 //! The presets beside them are shortcuts, not the only colours: the sliders reach all of them.
 
 use bevy::ecs::relationship::RelatedSpawnerCommands;
+use bevy::ui::{Display, UiSystems};
 use bevy::ui_widgets::{
     Slider, SliderRange, SliderThumb, SliderValue, TrackClick, ValueChange, observe,
 };
 use bevy::{prelude::*, text::FontSize};
 
+use super::card::MarkerCard;
 use super::card::{CARD_PIXELS, CORNER_RADIUS, MAX_CARD, MAX_RADIUS, MIN_CARD, MIN_RADIUS};
-use super::{DEFAULT_COLOUR, MarkerView, PhotoMarkerSystems, PhotoMarkers, file, photo};
+use super::scatter::{self, MAX_COUNT, MIN_COUNT, SCATTER_COUNT, Scatter};
+use super::tether::{MAX_WIDTH, MIN_WIDTH, SELECTED_WIDTH};
+use super::{DEFAULT_COLOUR, MarkerView, PhotoMarkerSystems, PhotoMarkers, Showing, file, photo};
 use crate::plugins::provenance::ascii;
 use crate::plugins::rail_editor::RailEditor;
 
@@ -50,7 +56,15 @@ impl Plugin for PhotoPanelPlugin {
             // After the mouse has had its say on the selection, so the readout is of the marker
             // clicked this frame rather than the one before it.
             // After the placing too, which is what measures the marker on screen.
-            (update_readout, update_size_readout).after(PhotoMarkerSystems),
+            (update_readout, update_size_readout, update_scatter_readout).after(PhotoMarkerSystems),
+        );
+        app.add_systems(
+            PostUpdate,
+            // After every system that places a label or a panel, all of which run before the
+            // nodes are laid out, and before that laying out, which is what reads this.
+            quieten_everything_else
+                .after(UiSystems::Prepare)
+                .before(UiSystems::Layout),
         );
     }
 }
@@ -205,11 +219,18 @@ struct MarkerButton(Action);
 #[derive(Component)]
 struct Caption;
 
+/// The line that says which folder a scatter would take its photographs from.
+#[derive(Component)]
+struct ScatterReadout;
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Action {
     ClearPhoto,
     Remove,
     Save,
+    /// The two testing ones: choose a folder of photographs, and fill the view from it.
+    Folder,
+    Scatter,
 }
 
 /// What the buttons can be judged against: whether there is a marker to work on, and whether it
@@ -219,16 +240,20 @@ struct Readiness {
     selected: bool,
     has_photo: bool,
     can_save: bool,
+    /// Whether a folder with something readable in it has been chosen, which is what a scatter
+    /// needs and the only thing it needs.
+    has_photos: bool,
 }
 
 impl Readiness {
-    fn of(markers: &PhotoMarkers) -> Self {
+    fn of(markers: &PhotoMarkers, scatter: &Scatter) -> Self {
         Self {
             selected: markers.selected.is_some(),
             has_photo: markers
                 .selected()
                 .is_some_and(|marker| marker.photo.is_some()),
             can_save: markers.can_save(),
+            has_photos: scatter.ready(),
         }
     }
 }
@@ -239,6 +264,8 @@ impl Action {
             Self::ClearPhoto => "clear photo",
             Self::Remove => "remove",
             Self::Save => "save",
+            Self::Folder => "folder...",
+            Self::Scatter => "scatter",
         }
     }
 
@@ -249,6 +276,8 @@ impl Action {
             Self::ClearPhoto => readiness.has_photo,
             Self::Remove => readiness.selected,
             Self::Save => readiness.can_save,
+            Self::Folder => true,
+            Self::Scatter => readiness.has_photos,
         }
     }
 }
@@ -380,6 +409,12 @@ fn spawn_slider(panel: &mut RelatedSpawnerCommands<ChildOf>, channel: Channel, c
 enum Size {
     Card,
     Corner,
+    /// How heavy the selected marker is drawn, in every part of itself. The rest keep a fixed
+    /// width, which is what makes this one mean anything.
+    Selected,
+    /// How many markers the scatter button makes. A testing affordance rather than a size, but
+    /// it is a number on a track like the other two and there is no reason to build it twice.
+    Count,
 }
 
 impl Size {
@@ -387,6 +422,8 @@ impl Size {
         match self {
             Self::Card => "card",
             Self::Corner => "corner",
+            Self::Selected => "selected",
+            Self::Count => "how many",
         }
     }
 
@@ -394,6 +431,8 @@ impl Size {
         match self {
             Self::Card => SliderRange::new(MIN_CARD, MAX_CARD),
             Self::Corner => SliderRange::new(MIN_RADIUS, MAX_RADIUS),
+            Self::Selected => SliderRange::new(MIN_WIDTH, MAX_WIDTH),
+            Self::Count => SliderRange::new(MIN_COUNT, MAX_COUNT),
         }
     }
 
@@ -401,6 +440,8 @@ impl Size {
         match self {
             Self::Card => markers.card_pixels,
             Self::Corner => markers.corner_radius,
+            Self::Selected => markers.selected_width,
+            Self::Count => markers.scatter_count,
         }
     }
 
@@ -408,6 +449,9 @@ impl Size {
         match self {
             Self::Card => markers.card_pixels = value,
             Self::Corner => markers.corner_radius = value,
+            Self::Selected => markers.selected_width = value,
+            // Whole markers: the slider is continuous and a press makes a countable number.
+            Self::Count => markers.scatter_count = value.round(),
         }
     }
 
@@ -424,6 +468,8 @@ impl Size {
             Self::Card => format!("{:.0} px", markers.card_pixels),
             Self::Corner if markers.corner_radius < 0.5 => "square".to_string(),
             Self::Corner => format!("{:.0} px", markers.corner_radius),
+            Self::Selected => format!("{:.1} px", markers.selected_width),
+            Self::Count => format!("{:.0}", markers.scatter_count),
         }
     }
 }
@@ -558,6 +604,7 @@ fn spawn_panel(mut commands: Commands) {
 
             spawn_size_slider(panel, Size::Card, card);
             spawn_size_slider(panel, Size::Corner, corner);
+            spawn_size_slider(panel, Size::Selected, SELECTED_WIDTH);
 
             panel.spawn(row()).with_children(|line| {
                 line.spawn((
@@ -596,6 +643,21 @@ fn spawn_panel(mut commands: Commands) {
                 }
             });
 
+            spawn_size_slider(panel, Size::Count, SCATTER_COUNT);
+
+            panel.spawn((
+                ScatterReadout,
+                Text::new(String::new()),
+                font(),
+                TextColor(Color::srgb(0.7, 0.78, 0.82)),
+            ));
+
+            panel.spawn(row()).with_children(|actions| {
+                for action in [Action::Folder, Action::Scatter] {
+                    spawn_button(actions, action);
+                }
+            });
+
             panel.spawn(row()).with_children(|actions| {
                 for action in [Action::ClearPhoto, Action::Remove, Action::Save] {
                     spawn_button(actions, action);
@@ -604,8 +666,11 @@ fn spawn_panel(mut commands: Commands) {
         });
 }
 
-/// F10 turns marker mode on and off, and stands the rail editor down as it comes on: both panels
-/// want the bottom right corner, and both want Delete and Escape. The panel follows in
+/// F10 cycles: open for work, stand back and look at the photographs, put them away. See
+/// Showing for why the middle one is worth a state of its own.
+///
+/// The rail editor is stood down as the editing state comes on, because both panels want the
+/// bottom right corner and both want Delete and Escape. The panel's own visibility follows in
 /// show_panel, so the key is read once and the two cannot drift apart.
 fn toggle_markers(
     keys: Res<ButtonInput<KeyCode>>,
@@ -616,19 +681,93 @@ fn toggle_markers(
         return;
     }
 
-    markers.editing = !markers.editing;
-    if let (true, Some(mut editor)) = (markers.editing, editor) {
+    markers.showing = markers.showing.next();
+
+    // Only the state that wants the corner stands the editor down. Coming back the other way,
+    // to the photographs alone, gives it back without the editor having to ask.
+    if let (true, Some(mut editor)) = (markers.showing.editing(), editor) {
         editor.editing = false;
     }
-    info!(
-        "photo markers: {}",
-        if markers.editing { "on" } else { "off" }
-    );
+    info!("photo markers: {}", markers.showing.name());
 }
 
-/// The panel is visible exactly while marker mode is on.
+/// Everything on screen that belongs to somebody else: a UI node with no parent, which is not
+/// one of the markers' own cards.
+type SomebodyElses<'world, 'state> = Query<
+    'world,
+    'state,
+    (Entity, &'static mut Node, &'static mut Visibility),
+    (Without<ChildOf>, Without<MarkerCard>),
+>;
+
+/// What one of those was before it was taken off the screen.
+type AsItWas = (Entity, Display, Visibility);
+
+/// Takes everything else off the screen while F10 is showing the photographs on their own.
+///
+/// Every root UI node that is not a card belongs to something else: the frame rate graph, the
+/// VRAM readout, the trains table, the station and train names, this panel. The middle state
+/// exists to look at the photographs, and a count of atlas slots lying across the top of one is
+/// not part of looking at it. So the rule is the whole rule: if it is on screen and it is not a
+/// photograph, it goes.
+///
+/// It is `display` that does the taking, and not only `Visibility`. The labels decide their own
+/// visibility every frame, in PostUpdate as this does, and nothing ordered the two against each
+/// other — so a station name hidden here was shown again by its own system on whichever frames
+/// the scheduler happened to run it second, and the names stayed on screen. Nothing else writes
+/// `display`, so a node given `Display::None` keeps it however the frame is ordered; bevy_ui
+/// then lays it out to nothing, and both the node and its text are skipped for being empty.
+///
+/// The ordering is belt to that brace: after `UiSystems::Prepare`, which every one of those
+/// label systems runs before, and ahead of the layout that reads what this writes.
+///
+/// Each is put back exactly as it was found. An overlay that has its own say about visibility
+/// will have it again on the next frame; one that has none keeps what it is given here.
+fn quieten_everything_else(
+    markers: Res<PhotoMarkers>,
+    mut quiet: Local<bool>,
+    mut remembered: Local<Vec<AsItWas>>,
+    mut nodes: SomebodyElses,
+) {
+    let wanted = markers.showing == Showing::Photos;
+
+    match (wanted, *quiet) {
+        // On the way in, what each was is written down before it is taken away.
+        (true, false) => {
+            remembered.clear();
+            for (entity, mut node, mut visibility) in &mut nodes {
+                remembered.push((entity, node.display, *visibility));
+                node.display = Display::None;
+                visibility.set_if_neq(Visibility::Hidden);
+            }
+        }
+        (true, true) => {
+            for (_, mut node, mut visibility) in &mut nodes {
+                if node.display != Display::None {
+                    node.display = Display::None;
+                }
+                visibility.set_if_neq(Visibility::Hidden);
+            }
+        }
+        // And on the way out, back as they were.
+        (false, true) => {
+            for (entity, display, visibility) in remembered.drain(..) {
+                if let Ok((_, mut node, mut was)) = nodes.get_mut(entity) {
+                    node.display = display;
+                    was.set_if_neq(visibility);
+                }
+            }
+        }
+        (false, false) => {}
+    }
+
+    *quiet = wanted;
+}
+
+/// The panel is visible exactly while F10 is on its editing state. The cards follow
+/// `Showing::cards` instead, so the middle state leaves the photographs and takes the panel.
 fn show_panel(markers: Res<PhotoMarkers>, mut panel: Single<&mut Visibility, With<MarkerPanel>>) {
-    let visibility = if markers.editing {
+    let visibility = if markers.showing.editing() {
         Visibility::Visible
     } else {
         Visibility::Hidden
@@ -636,13 +775,17 @@ fn show_panel(markers: Res<PhotoMarkers>, mut panel: Single<&mut Visibility, Wit
     panel.set_if_neq(visibility);
 }
 
+#[allow(clippy::too_many_arguments)]
 fn press_buttons(
     mut commands: Commands,
     mut markers: ResMut<PhotoMarkers>,
+    scatter: Res<Scatter>,
+    grids: big_space::prelude::Grids,
+    camera: Query<super::MarkerCamera, With<bevy_terrain::prelude::OrbitalCameraController>>,
     mut cards: Query<&mut ImageNode>,
     buttons: Query<(&MarkerButton, &Interaction), Changed<Interaction>>,
 ) {
-    let readiness = Readiness::of(&markers);
+    let readiness = Readiness::of(&markers, &scatter);
 
     for (button, interaction) in &buttons {
         if *interaction != Interaction::Pressed || !button.0.enabled(readiness) {
@@ -664,6 +807,20 @@ fn press_buttons(
                 }
             }
             Action::Save => file::save_markers(&mut markers),
+            Action::Folder => scatter::choose_folder(&mut commands),
+            Action::Scatter => {
+                // Around whatever the camera is over at the moment of the press, so a scatter
+                // fills the view you are looking at rather than one you were.
+                let Some(position) = camera.single().ok().and_then(|camera| {
+                    let grid = grids.parent_grid(camera.entity)?;
+                    Some(grid.grid_position_double(camera.cell, camera.transform))
+                }) else {
+                    continue;
+                };
+
+                let (around, altitude) = scatter::over_the_camera(position);
+                scatter::scatter_markers(&mut markers, &scatter, around, altitude, &mut commands);
+            }
         }
     }
 }
@@ -700,9 +857,10 @@ fn button_colour(interaction: Interaction, enabled: bool) -> Color {
 /// is skipped when the colour is already right.
 fn colour_buttons(
     markers: Res<PhotoMarkers>,
+    scatter: Res<Scatter>,
     mut buttons: Query<(&MarkerButton, &Interaction, &mut BackgroundColor)>,
 ) {
-    let readiness = Readiness::of(&markers);
+    let readiness = Readiness::of(&markers, &scatter);
 
     for (button, interaction, mut background) in &mut buttons {
         let colour = button_colour(*interaction, button.0.enabled(readiness));
@@ -713,10 +871,11 @@ fn colour_buttons(
 /// Greys the caption of a button that cannot apply, and whitens it again when it can.
 fn dim_buttons(
     markers: Res<PhotoMarkers>,
+    scatter: Res<Scatter>,
     buttons: Query<&MarkerButton>,
     mut captions: Query<(&ChildOf, &mut TextColor), With<Caption>>,
 ) {
-    let readiness = Readiness::of(&markers);
+    let readiness = Readiness::of(&markers, &scatter);
 
     for (child_of, mut colour) in &mut captions {
         let Ok(button) = buttons.get(child_of.parent()) else {
@@ -862,6 +1021,14 @@ fn update_size_readout(
     }
 
     readout.set_if_neq(Text::new(view_text(view.shown, view.total)));
+}
+
+/// Says which folder a scatter would take its photographs from.
+fn update_scatter_readout(
+    scatter: Res<Scatter>,
+    mut readout: Single<&mut Text, With<ScatterReadout>>,
+) {
+    readout.set_if_neq(Text::new(scatter.caption()));
 }
 
 /// What the panel says about how many of the markers actually have a card on screen, which is
