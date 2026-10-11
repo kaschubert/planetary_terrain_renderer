@@ -11,7 +11,7 @@
 //! which on the main one would be a visible hitch. The task is polled each frame, the shape the
 //! live feed's fetch uses. What it returns is already the texture's pixels: the image crate
 //! applies the orientation a phone wrote into the file and shrinks anything longer than
-//! MAX_PHOTO_EDGE, so that a 24 megapixel photo does not cost 96 MB of video memory.
+//! MAX_PHOTO_EDGE, which is what keeps a collection of several hundred inside a graphics card.
 //!
 //! Nothing is letterboxed any more. The quad this used to go on had a fixed shape, so a photo had
 //! to be padded onto it; a card has no shape of its own and takes the photo's, so what the decode
@@ -30,11 +30,19 @@ use std::path::{Path, PathBuf};
 use super::card::{self, MarkerCard};
 use super::{MarkerId, PhotoMarkers};
 
-/// The longest edge a photo is kept at, in pixels. A screen a few metres across is never drawn
-/// at more than a few hundred pixels, so this is already generous; it is the cap that keeps a
-/// phone's full resolution out of video memory, where each photo costs width by height by four
-/// bytes with no mip levels to fall back on.
-const MAX_PHOTO_EDGE: u32 = 2048;
+/// The longest edge a photo is kept at, in pixels: twice the longest a card can ever be drawn.
+///
+/// This is the one number that decides what a collection costs in video memory. A photo is held
+/// as width by height by four bytes with no mip levels, so at the 2048 this used to be — a
+/// figure inherited from the 3D plate, where a photo was a texture on a quad — each marker cost
+/// about 21 MB. Four hundred and eighty-seven of them wanted some ten gigabytes on a card with
+/// eight, which is a collection that cannot be held at all rather than one held expensively.
+///
+/// A card is at most MAX_CARD logical pixels on its long edge, which on a screen at scale two is
+/// twice that in real ones, so anything beyond this was never going to be seen. The doubling is
+/// the scale factor, written as the arithmetic it is so that raising the card slider's ceiling
+/// carries the texture with it.
+const MAX_PHOTO_EDGE: u32 = super::card::MAX_CARD as u32 * 2;
 
 /// What the selected card is tinted while a file hovers the window, so it is clear which marker
 /// a drop would land on. A wash rather than a brightening: an empty card is already cream, and
