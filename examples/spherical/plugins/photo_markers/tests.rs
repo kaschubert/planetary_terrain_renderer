@@ -621,7 +621,7 @@ fn the_ease_closes_on_its_target_and_then_snaps_to_it() {
 // The tether: where it leaves the card, and the rule that keeps its end cap out of sight.
 
 use super::card::corner_radius as card_radius;
-use super::tether::{attach, cap, curve, distance_to, start};
+use super::tether::{attach, cap, curve, distance_to, start, tip};
 
 /// Every direction round a full turn, as a card's anchor might lie in any of them.
 fn around() -> impl Iterator<Item = Vec2> {
@@ -740,6 +740,54 @@ fn the_curve_runs_from_the_card_to_the_dot_and_leaves_the_way_the_border_faces()
     // And it arrives from above, which is what makes it rise out of the mark on the ground.
     let last = (points[points.len() - 1] - points[points.len() - 2]).normalize();
     assert!(last.y > 0.5, "the tether comes into the dot at {last:?}");
+}
+
+#[test]
+fn the_round_end_fills_a_disc_and_does_not_bulge_past_the_tether() {
+    use super::tether::{MAX_WIDTH, MIN_WIDTH, SELECTED_WIDTH, TETHER_WIDTH};
+
+    let anchor = Vec2::new(400.0, 300.0);
+
+    for width in [MIN_WIDTH, TETHER_WIDTH, SELECTED_WIDTH, MAX_WIDTH] {
+        let half = width / 2.0;
+        let ring = tip(anchor, width);
+        let radius = ring[0].distance(anchor);
+        // Half the turn between neighbours, which is where a chord stands closest to the middle.
+        let facet = std::f32::consts::PI / ring.len() as f32;
+
+        assert!(
+            ring.len() >= 3,
+            "a ring of {} points is not a ring",
+            ring.len()
+        );
+
+        // Round: every point the same distance out, so what the stroke leaves is a disc rather
+        // than a lopsided blob.
+        for point in &ring {
+            let distance = point.distance(anchor);
+
+            assert!(
+                (distance - radius).abs() < 1e-4,
+                "width {width}: a ring point is {distance} out where the first is {radius}"
+            );
+        }
+
+        // Filled: each segment's chord passes within a half width of the mark, so the stroke
+        // crosses the middle instead of leaving a hoop with a hole in it.
+        let chord = radius * facet.cos();
+        assert!(
+            chord <= half,
+            "width {width}: the chords stand {chord} px off the mark against a {half} px half \
+             width, so the end would be drawn as a hoop"
+        );
+
+        // Flush: the stroke reaches radius + half and a round cap reaches half, so the overshoot
+        // is the ring's own radius, and it has to be small enough not to read as a knob.
+        assert!(
+            radius <= half * 0.25,
+            "width {width}: the end stands {radius} px past a {half} px half width"
+        );
+    }
 }
 
 // The scatter button: the folder it reads and the disc it lays markers in.

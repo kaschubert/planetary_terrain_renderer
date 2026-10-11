@@ -14,6 +14,12 @@
 //! and off the radius, clamped at zero. So the same routine is called twice against different
 //! numbers and there is no second piece of geometry to get wrong.
 //!
+//! The far end is rounded the same way round: a gizmo strip is squared off across its own
+//! direction at both of its ends, so a tether that stops at its mark stops as a flat edge. The
+//! cap is a disc of the stroke's own half width centred on the mark, which covers that flat edge
+//! whatever direction the tether came in from — every point of it is a half width from the mark
+//! and none is further — and leaves standing past it the semicircle that a round end is.
+//!
 //! Drawn with the gizmos the dots already use: the curve is sampled in screen space and each
 //! point unprojected to a fixed distance in front of the camera, so what is drawn is a ray
 //! through that pixel whatever distance is picked. Gizmo lines are one width per config group, so
@@ -64,6 +70,20 @@ const SEGMENTS: usize = 20;
 /// same pixel, since what is unprojected is a ray through it; this one is simply well inside the
 /// frustum at every altitude the example flies at.
 const DEPTH: f32 = 100.0;
+
+/// How big the ring that rounds the far end is, as a share of the stroke's half width.
+///
+/// There are no filled shapes among the gizmos, only strokes, so the cap's disc is drawn as a
+/// ring small enough that its own stroke closes over the middle. A ring of radius r stroked at
+/// half width h reaches out to r + h, and a round cap reaches h, so r is exactly how far the tip
+/// bulges past the line's own edge: it has to be a small share of the half width rather than
+/// anything like it. A tenth is a sixth of a pixel at the thin width and under a pixel at the
+/// widest the slider goes, and still leaves segments long enough to take a direction from.
+const TIP_SEED: f32 = 0.1;
+
+/// How many pieces that ring is drawn in, which is how many facets the round end has. Sixteen is
+/// a fifth of a pixel off a circle at the widest tether and a thirtieth at the thinnest.
+const TIP_SEGMENTS: usize = 16;
 
 /// The half width the tether actually gets on a card this size: its own, held under a share of
 /// the card's shorter half so that the cap always has room to hide.
@@ -158,6 +178,24 @@ pub(super) fn curve(from: Vec2, normal: Vec2, anchor: Vec2) -> Vec<Vec2> {
         .collect()
 }
 
+/// The round end, as a ring of points about the mark on the ground.
+///
+/// Drawn as a loop rather than a strip, so that the seam gets a joint like every other corner and
+/// the disc has no notch taken out of it. It leans on `GizmoLineJoint::Miter`, which the curve
+/// already needs for its own reasons: at this radius every segment crosses the middle and it is
+/// the joints that cover the rest, so with no joints at all this would draw a star.
+pub(super) fn tip(anchor: Vec2, width: f32) -> Vec<Vec2> {
+    let radius = width / 2.0 * TIP_SEED;
+
+    (0..TIP_SEGMENTS)
+        .map(|step| {
+            let angle = std::f32::consts::TAU * step as f32 / TIP_SEGMENTS as f32;
+
+            anchor + Vec2::from_angle(angle) * radius
+        })
+        .collect()
+}
+
 /// The two ends of the flat cap the ribbon starts with, which are what must stay under the card.
 /// The cap is square to the curve's first direction, which is the border's outward normal.
 ///
@@ -215,6 +253,10 @@ pub(super) fn draw_tethers(
     let camera_position = grid.grid_position_double(camera.cell, camera.transform);
 
     for (index, marker) in markers.markers.iter().enumerate() {
+        let selected = Some(index) == markers.selected;
+        if !selected && !markers.all_tethers {
+            continue;
+        }
         let Some(entity) = marker.card else {
             continue;
         };
@@ -237,16 +279,37 @@ pub(super) fn draw_tethers(
 
         let radius = super::card::corner_radius(markers.corner_radius, card.size());
         let (from, normal) = start(card, radius, anchor);
-        let points = curve(from, normal, anchor)
-            .into_iter()
-            .filter_map(|point| unproject(point, camera.camera, camera.global));
 
-        match Some(index) == markers.selected {
-            true => bold.linestrip(points, CREAM),
-            false if markers.all_tethers => gizmos.linestrip(points, seasons.colour_of(marker)),
-            false => {}
+        // The cap has to be sized from the width the group it goes into is drawn at, since that
+        // is what decides how far the stroke round the ring reaches.
+        let (width, colour) = match selected {
+            true => (markers.selected_width, CREAM),
+            false => (TETHER_WIDTH, seasons.colour_of(marker)),
+        };
+        let line = in_front(curve(from, normal, anchor), camera.camera, camera.global);
+        let round = in_front(tip(anchor, width), camera.camera, camera.global);
+
+        match selected {
+            true => {
+                bold.linestrip(line, colour);
+                bold.lineloop(round, colour);
+            }
+            false => {
+                gizmos.linestrip(line, colour);
+                gizmos.lineloop(round, colour);
+            }
         }
     }
+}
+
+/// A run of points in the viewport as points in front of the camera. All of them or none in
+/// practice: the unprojection only fails when the camera has no viewport to speak of, which is
+/// as true of one point as of every other.
+fn in_front(points: Vec<Vec2>, camera: &Camera, global: &GlobalTransform) -> Vec<Vec3> {
+    points
+        .into_iter()
+        .filter_map(|point| unproject(point, camera, global))
+        .collect()
 }
 
 /// A point in the viewport as a point in front of the camera, in the frame the gizmos are drawn
