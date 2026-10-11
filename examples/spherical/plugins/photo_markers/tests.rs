@@ -1227,3 +1227,16 @@ fn no_season_is_drawn_in_a_colour_another_season_could_be_mistaken_for() {
         );
     }
 }
+
+#[test]
+fn the_tether_button_says_what_pressing_it_would_do() {
+    use super::panel::Action;
+
+    // Off is where it starts: one tether, for the marker being worked on.
+    let mut markers = PhotoMarkers::default();
+    assert!(!markers.all_tethers);
+    assert_eq!(Action::Tethers.caption(&markers), "all tethers");
+
+    markers.all_tethers = true;
+    assert_eq!(Action::Tethers.caption(&markers), "one tether");
+}

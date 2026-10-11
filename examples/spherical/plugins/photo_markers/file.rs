@@ -148,6 +148,7 @@ impl PhotoMarkers {
             card_pixels: CARD_PIXELS,
             corner_radius: CORNER_RADIUS,
             selected_width: super::tether::SELECTED_WIDTH,
+            all_tethers: false,
             scatter_count: super::scatter::SCATTER_COUNT,
             ..default()
         }

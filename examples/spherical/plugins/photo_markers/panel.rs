@@ -224,7 +224,11 @@ struct Caption;
 struct ScatterReadout;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum Action {
+pub(super) enum Action {
+    /// Draws every tether or only the selected marker's: a two-state button, whose caption
+    /// says what pressing it would do rather than what the state is, as a switch on a wall
+    /// does not.
+    Tethers,
     ClearPhoto,
     Remove,
     Save,
@@ -259,8 +263,10 @@ impl Readiness {
 }
 
 impl Action {
-    fn caption(self) -> &'static str {
+    pub(super) fn caption(self, markers: &PhotoMarkers) -> &'static str {
         match self {
+            Self::Tethers if markers.all_tethers => "one tether",
+            Self::Tethers => "all tethers",
             Self::ClearPhoto => "clear photo",
             Self::Remove => "remove",
             Self::Save => "save",
@@ -273,6 +279,7 @@ impl Action {
     /// it; saving wants something unsaved and a file it may write over.
     fn enabled(self, readiness: Readiness) -> bool {
         match self {
+            Self::Tethers => true,
             Self::ClearPhoto => readiness.has_photo,
             Self::Remove => readiness.selected,
             Self::Save => readiness.can_save,
@@ -312,7 +319,8 @@ fn spawn_button(row: &mut RelatedSpawnerCommands<ChildOf>, action: Action) {
         BackgroundColor(BUTTON_COLOUR),
         children![(
             Caption,
-            Text::new(action.caption()),
+            // Settled by dim_buttons on the first frame, which is what a two-state caption needs.
+            Text::new(String::new()),
             font(),
             TextColor(Color::WHITE)
         )],
@@ -606,6 +614,10 @@ fn spawn_panel(mut commands: Commands) {
             spawn_size_slider(panel, Size::Corner, corner);
             spawn_size_slider(panel, Size::Selected, SELECTED_WIDTH);
 
+            panel
+                .spawn(row())
+                .with_children(|actions| spawn_button(actions, Action::Tethers));
+
             panel.spawn(row()).with_children(|line| {
                 line.spawn((
                     ColourSwatch,
@@ -806,6 +818,16 @@ fn press_buttons(
                     commands.entity(entity).despawn();
                 }
             }
+            Action::Tethers => {
+                markers.all_tethers = !markers.all_tethers;
+                info!(
+                    "photo markers: {}",
+                    match markers.all_tethers {
+                        true => "every tether drawn",
+                        false => "only the selected marker's tether",
+                    }
+                );
+            }
             Action::Save => file::save_markers(&mut markers),
             Action::Folder => scatter::choose_folder(&mut commands),
             Action::Scatter => {
@@ -873,11 +895,11 @@ fn dim_buttons(
     markers: Res<PhotoMarkers>,
     scatter: Res<Scatter>,
     buttons: Query<&MarkerButton>,
-    mut captions: Query<(&ChildOf, &mut TextColor), With<Caption>>,
+    mut captions: Query<(&ChildOf, &mut TextColor, &mut Text), With<Caption>>,
 ) {
     let readiness = Readiness::of(&markers, &scatter);
 
-    for (child_of, mut colour) in &mut captions {
+    for (child_of, mut colour, mut caption) in &mut captions {
         let Ok(button) = buttons.get(child_of.parent()) else {
             continue;
         };
@@ -887,6 +909,9 @@ fn dim_buttons(
             DISABLED_TEXT
         };
         colour.set_if_neq(TextColor(text));
+        // Written here rather than once at spawn, because a two-state button's caption is part
+        // of the state and not part of the furniture.
+        caption.set_if_neq(Text::new(button.0.caption(&markers)));
     }
 }
 

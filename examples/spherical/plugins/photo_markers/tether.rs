@@ -182,8 +182,11 @@ pub(super) fn distance_to(point: Vec2, centre: Vec2, half: Vec2, radius: f32) ->
 
 /// Draws a tether from every card on screen to the mark on the ground it is about.
 ///
-/// Only cards: a marker with no card has nothing for a tether to come from, and its dot says
-/// where it is on its own.
+/// Only the selected marker's, unless the panel's button asks for all of them. One line can be
+/// followed; four hundred are a haystack, and a card is already matched to its mark by colour.
+///
+/// Only cards either way: a marker with no card has nothing for a tether to come from, and its
+/// dot says where it is on its own.
 ///
 /// The colour is the marker's, which is what the eight presets paint now that there is no plate
 /// to paint — except for the selected one, whose tether is cream like its frame and its ring.
@@ -240,7 +243,8 @@ pub(super) fn draw_tethers(
 
         match Some(index) == markers.selected {
             true => bold.linestrip(points, CREAM),
-            false => gizmos.linestrip(points, seasons.colour_of(marker)),
+            false if markers.all_tethers => gizmos.linestrip(points, seasons.colour_of(marker)),
+            false => {}
         }
     }
 }

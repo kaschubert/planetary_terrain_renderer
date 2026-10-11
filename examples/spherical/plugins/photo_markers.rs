@@ -234,6 +234,14 @@ pub struct PhotoMarkers {
     /// How heavy the selected marker is drawn, in pixels: its tether, its dot, the ring round
     /// it and the frame round its card. Everything else keeps TETHER_WIDTH.
     pub selected_width: f32,
+    /// Whether every marker's tether is drawn, or only the selected one's, which is where the
+    /// panel's button starts.
+    ///
+    /// One line is a line you can follow; four hundred are a haystack with a needle somewhere
+    /// in it, and the colour already matches a card to its mark without the line being traced.
+    /// So the tether is kept for the one marker being worked on, and the button is there for
+    /// the times when the whole web of them is the thing worth seeing.
+    pub all_tethers: bool,
     /// How many markers the panel's scatter button makes. A testing affordance, see scatter.rs,
     /// and the one field here that is not about what a marker is.
     pub scatter_count: f32,
