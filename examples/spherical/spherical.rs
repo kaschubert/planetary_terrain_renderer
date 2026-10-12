@@ -1,5 +1,4 @@
 use bevy::dev_tools::fps_overlay::FpsOverlayPlugin;
-use bevy::math::DVec3;
 use bevy::text::FontSize;
 use bevy::window::WindowResolution;
 use bevy::{prelude::*, reflect::TypePath, render::render_resource::*, shader::ShaderRef};
@@ -10,6 +9,7 @@ use transform_gizmo_bevy::{GizmoCamera, TransformGizmoPlugin};
 
 mod plugins;
 use plugins::auckland_rail::AucklandRailPlugin;
+use plugins::camera_pose::{CameraButtonRow, CameraPosePlugin, home_pose};
 use plugins::live_trains::LiveTrainsPlugin;
 use plugins::photo_markers::PhotoMarkersPlugin;
 use plugins::provenance::ProvenancePlugin;
@@ -21,12 +21,6 @@ use plugins::trains::TrainsPlugin;
 use plugins::vram_usage::VramUsagePlugin;
 
 const RADIUS: f64 = 6371000.0;
-
-// Where the camera starts: over Auckland, looking north over the harbour from the city
-// centre, with West and South Auckland to either side.
-const CAMERA_LONGITUDE: f64 = 174.7633;
-const CAMERA_LATITUDE: f64 = -36.8485;
-const CAMERA_ALTITUDE: f32 = 1000.0;
 
 #[derive(ShaderType, Clone)]
 struct GradientInfo {
@@ -143,6 +137,7 @@ fn main() {
             // plugins at most, and with these there are more.
             (
                 VramUsagePlugin,    // gpu allocator usage, below the fps overlay
+                CameraPosePlugin,   // the camera's start, and the F1 list's two buttons
                 ProvenancePlugin,   // where each terrain's pixels came from, top right
                 SheetGridPlugin,    // the Topo50 sheets over the terrain, coloured by coverage
                 AucklandRailPlugin, // the rail lines over Auckland, in AT's colours
@@ -164,13 +159,13 @@ fn main() {
         // A terrain costs roughly 2.6 MiB per atlas slot, for height and albedo together,
         // and the atlas is allocated whole however few slots are in use. With loading
         // culled to the view frustum the resident terrains hold about a hundred slots
-        // each, against 1028 at the default size, so 256 leaves better than twice that in
-        // hand for the burst a fast turn requests before released slots cycle back. Three
-        // are resident at once at most - the globe, the country and a city - which is
-        // about 2.0 GiB. Running out no longer panics either: the
-        // finest tiles just go missing until the tree re-requests them, with a warning.
+        // each, against 1028 at the default size, but 256 still ran out, so 384 leaves
+        // more room for the burst a fast turn requests before released slots cycle back.
+        // Three are resident at once at most - the globe, the country and a city - which
+        // is about 2.9 GiB. Running out no longer panics either: the finest tiles just go
+        // missing until the tree re-requests them, with a warning.
         .insert_resource(TerrainSettings {
-            atlas_size: 256,
+            atlas_size: 384,
             ..TerrainSettings::new(vec!["albedo"])
         })
         // .insert_resource(ClearColor(Color::WHITE))
@@ -209,16 +204,17 @@ fn hotkey_list_text() -> String {
         .join("\n")
 }
 
+/// The F1 list: a row of buttons, then the hotkeys themselves.
+///
+/// A column now rather than one text node, so that the camera buttons have somewhere to sit.
+/// The row is left empty here and filled by camera_pose, which owns what goes in it. Both the
+/// row and the text inherit the list's visibility, so F1 still shows and hides the lot, and
+/// the buttons cannot be clicked while it is down: Bevy's UI picking skips what is not drawn.
 fn spawn_hotkey_list(mut commands: Commands) {
     commands.spawn((
         HotkeyList,
         // Off until asked for; F1 brings it up.
         Visibility::Hidden,
-        Text::new(hotkey_list_text()),
-        TextFont {
-            font_size: FontSize::Px(13.0),
-            ..default()
-        },
         Node {
             position_type: PositionType::Absolute,
             // Below the fps overlay, whose graph puts its bottom edge around 120 px.
@@ -227,9 +223,32 @@ fn spawn_hotkey_list(mut commands: Commands) {
             // Bounded so the longer lines wrap instead of running across the screen.
             width: Val::Px(560.0),
             padding: UiRect::all(Val::Px(6.0)),
+            flex_direction: FlexDirection::Column,
+            row_gap: Val::Px(6.0),
             ..default()
         },
         BackgroundColor(Color::srgba(0.0, 0.0, 0.0, 0.5)),
+        children![
+            (
+                CameraButtonRow,
+                Node {
+                    flex_direction: FlexDirection::Row,
+                    // Wrapping rather than overflowing, as the marker panel's rows do.
+                    flex_wrap: FlexWrap::Wrap,
+                    align_items: AlignItems::Center,
+                    column_gap: Val::Px(6.0),
+                    row_gap: Val::Px(4.0),
+                    ..default()
+                },
+            ),
+            (
+                Text::new(hotkey_list_text()),
+                TextFont {
+                    font_size: FontSize::Px(13.0),
+                    ..default()
+                },
+            ),
+        ],
     ));
 }
 
@@ -270,21 +289,24 @@ fn initialize(
 
     let mut view = Entity::PLACEHOLDER;
 
-    // Up is the camera's direction on the unit sphere and north the meridian's direction
-    // there, the part of the planet's axis that is level at up.
-    let up = unit_position(CAMERA_LONGITUDE, CAMERA_LATITUDE);
-    let north = (DVec3::Y - up * up.y).normalize();
-
-    let camera_position = Coordinate::from_unit_position(up, true)
-        .local_position(TerrainShape::WGS84, CAMERA_ALTITUDE);
-    // Tilted halfway between straight down and the horizon, facing north over the harbour.
-    let camera_direction = (north - up).normalize();
+    // Wherever the F1 list's save button last left the camera, or the start over Auckland
+    // with nothing saved yet. Written straight into the Transform below; the grid splits it
+    // on the frame after, as a spatial spawn is placed in cell zero and moved from there.
+    let (camera_position, camera_rotation) = home_pose();
 
     commands.spawn_big_space(Grid::default(), |root| {
+        // big_space is built without its camera feature, so the root bundle leaves out the
+        // Visibility it would otherwise carry, and every child that has one warns B0004:
+        // the chain visibility inherits along has no start. Inherited visibility falls back
+        // to visible when the parent has none, so nothing was hidden by it, but hiding the
+        // whole space by hiding its root would not have worked. Visibility requires
+        // InheritedVisibility and ViewVisibility, so this one insert gives the root all three.
+        root.insert(Visibility::default());
+
         view = root
             .spawn_spatial((
                 Transform::from_translation(camera_position.as_vec3())
-                    .looking_to(camera_direction.as_vec3(), up.as_vec3()),
+                    .with_rotation(camera_rotation),
                 DebugCameraController::new(RADIUS),
                 OrbitalCameraController::default(),
                 // The move gizmo draws through this camera and casts its pointer rays

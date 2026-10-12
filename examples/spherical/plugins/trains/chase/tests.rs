@@ -7,26 +7,27 @@ use crate::plugins::rail_editor::frame::tests::degrees_between;
 use crate::plugins::rail_editor::frame::{Frame, unit_under};
 use crate::plugins::track_frames::tests::{eastward, quarter_circle};
 use crate::plugins::track_frames::{TrackSpline, reversed};
-use crate::plugins::trains::TRAIN_SPEED;
+use crate::plugins::trains::{CARRIAGE_HEIGHT, TRAIN_SPEED, carriage_middle};
 
-/// On a level line due east the eye sits 60 m behind and 25 m above the frame, square to
-/// it, looking at the point 20 m ahead with no roll: the camera's right is level with the
-/// frame's up, and its up leans back from the frame's up by the pitch down to that point,
-/// which from 80 m back and 25 m up is seventeen degrees.
+/// On a level line due east the eye sits 60 m behind the carriage's middle and 25 m above it,
+/// square to the line, looking straight at it with no roll: the camera's right is level with
+/// the frame's up, and its up leans back from the frame's up by the orbit's own pitch, which
+/// from 60 m back and 25 m up is twenty-two and a half degrees.
 #[test]
-fn the_eye_sits_behind_and_above_the_frame_and_looks_a_little_ahead() {
+fn the_eye_sits_behind_and_above_the_carriage_and_looks_straight_at_it() {
     let line = eastward(21, 50.0, |_| 20.0);
     let spline = TrackSpline::through(&line).unwrap();
     let frame = spline.frame_at(500.0);
     let ground = Frame::at_unit(unit_under(frame.position));
     assert!(degrees_between(frame.forward(), ground.east) < 0.1);
 
-    let (eye, rotation) = chase_pose(
-        frame.position,
-        chase_heading(&frame, 0.0, None),
-        &Orbit::default(),
-    );
-    let offset = eye - frame.position;
+    // What the eye orbits is in the body of the carriage, half its height off the rail.
+    let middle = carriage_middle(&frame);
+    let lift = (middle - frame.position).dot(frame.up());
+    assert!((lift - CARRIAGE_HEIGHT as f64 / 2.0).abs() < 1e-9, "{lift}");
+
+    let (eye, rotation) = chase_pose(middle, chase_heading(&frame, 0.0, None), &Orbit::default());
+    let offset = eye - middle;
     assert!(
         (offset.dot(frame.forward()) + CHASE_BACK).abs() < 1e-6,
         "{offset}"
@@ -35,13 +36,10 @@ fn the_eye_sits_behind_and_above_the_frame_and_looks_a_little_ahead() {
     assert!(offset.dot(frame.right()).abs() < 1e-6, "{offset}");
     assert!((rotation.length() - 1.0).abs() < 1e-12);
 
-    let ahead = frame.position + frame.forward() * CHASE_AHEAD;
+    // At the carriage and not past it, which is the whole of what the orbit is round.
     let forward = rotation * DVec3::NEG_Z;
-    assert!(
-        degrees_between(forward, (ahead - eye).normalize()) < 0.1,
-        "{}",
-        degrees_between(forward, (ahead - eye).normalize())
-    );
+    let at_it = degrees_between(forward, (middle - eye).normalize());
+    assert!(at_it < 1e-6, "the view is {at_it} degrees off the carriage");
 
     let right = rotation * DVec3::X;
     let up = rotation * DVec3::Y;
@@ -51,7 +49,8 @@ fn the_eye_sits_behind_and_above_the_frame_and_looks_a_little_ahead() {
         right.dot(frame.up())
     );
     assert!(up.dot(frame.up()) > 0.0);
-    let pitch = (CHASE_UP / (CHASE_BACK + CHASE_AHEAD)).atan().to_degrees();
+    // The eye's pitch is the orbit's, there being no lead left to tilt away from it.
+    let pitch = Orbit::default().pitch.to_degrees();
     assert!(
         (degrees_between(up, frame.up()) - pitch).abs() < 0.1,
         "{}",
@@ -271,7 +270,7 @@ fn turning_the_orbit_takes_the_eye_round_the_carriage() {
         let forward = rotation * DVec3::NEG_Z;
         let to_carriage = (frame.position - eye).normalize();
         assert!(
-            degrees_between(forward, to_carriage) < 20.0,
+            degrees_between(forward, to_carriage) < 1e-6,
             "{yaw}: {}",
             degrees_between(forward, to_carriage)
         );

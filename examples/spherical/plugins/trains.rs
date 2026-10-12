@@ -35,6 +35,7 @@ use super::track_frames::{
     TRACK_CENTRES, TrackFrame, TrackSpline, TrackSplines, in_grid, offset, refresh_track_splines,
     reversed,
 };
+use bevy::math::DVec3;
 use bevy::{prelude::*, text::FontSize, ui::UiSystems, ui::widget::TextUiWriter};
 use bevy_terrain::prelude::*;
 use big_space::prelude::{CellCoord, Grids};
@@ -73,6 +74,11 @@ const MODEL_LIFT: f32 = -MODEL_MIN.y * MODEL_SCALE;
 /// How tall the carriage stands above the rail, in metres, which is where its label sits, and
 /// where a photo marker riding the train floats from.
 pub const CARRIAGE_HEIGHT: f32 = (MODEL_MAX.y - MODEL_MIN.y) * MODEL_SCALE;
+
+/// How wide the carriage is, in metres, across the frame's right: the model's own across axis
+/// at the same scale as the other two. The third side of the box the pointer is tested against,
+/// and the one measurement nothing had needed until there was a box.
+pub const CARRIAGE_WIDTH: f32 = (MODEL_MAX.z - MODEL_MIN.z) * MODEL_SCALE;
 
 /// The model, under the asset root. One carriage, one mesh, 6.6 MB: the low-poly draw of the
 /// carriage, 4,000 triangles where the first was 79,000, at the same proportions, so only
@@ -118,9 +124,14 @@ impl Plugin for TrainsPlugin {
 /// The trains and the switch that shows them.
 #[derive(Resource)]
 pub struct Trains {
-    /// Toggled by F7. Off, the carriages and labels are hidden and the trains drive on.
-    /// Shown only while the lines are, as the frames and the discs are: F4 hides everything
-    /// on the network.
+    /// Toggled by F7, and off until it is pressed. Off, the carriages and labels are hidden
+    /// and the trains drive on. Shown only while the lines are, as the frames and the discs
+    /// are: F4 hides everything on the network.
+    ///
+    /// Off to begin with because a carriage on every line is a great deal of the view to spend
+    /// on something not being worked on, and most of what the example is opened for is not the
+    /// trains. The stand-ins still start and still drive, so F7 shows a network already running
+    /// rather than one that begins the moment it is looked at.
     pub shown: bool,
     /// Metres per second, for every stand-in: TRAIN_SPEED.
     pub speed: f64,
@@ -141,7 +152,7 @@ pub struct Trains {
 impl Default for Trains {
     fn default() -> Self {
         Self {
-            shown: true,
+            shown: false,
             speed: TRAIN_SPEED,
             trains: Vec::new(),
             live: false,
@@ -369,6 +380,62 @@ pub fn carriage_frame(spline: &TrackSpline, train: &Train) -> TrackFrame {
     };
 
     offset(&facing, -TRACK_CENTRES / 2.0)
+}
+
+/// The middle of the carriage: where the chase camera looks, and what a click at a train aims
+/// at. A frame's position is on the rail, under the model's floor rather than in its body, so
+/// the middle is half a carriage's height up the frame's own up.
+pub fn carriage_middle(frame: &TrackFrame) -> DVec3 {
+    frame.position + frame.up() * (CARRIAGE_HEIGHT as f64 / 2.0)
+}
+
+/// How far along a ray the carriage standing in a frame begins, in metres, or None where the
+/// ray misses it.
+///
+/// The box is the one the model fills: a car's length along the frame's forward, its width
+/// across and its height up, centred on carriage_middle, which is where model_transform puts
+/// each of the model's three axes.
+///
+/// A slab test, and done in the box's own basis without building a matrix for it, since a
+/// frame's three axes are already orthonormal. The ray has to be between both faces of all
+/// three pairs at once, so the stretch of it that is inside the box is the overlap of the three
+/// stretches, and a miss is an empty overlap. The near end starts at nothing rather than at
+/// minus infinity, which both keeps a carriage behind the pointer from counting and answers
+/// zero for a ray that starts inside one.
+///
+/// Measured from wherever the ray starts, which for the caller is the near plane rather than
+/// the eye: that moves every distance by the same amount and so leaves their order alone.
+pub fn ray_into_carriage(frame: &TrackFrame, origin: DVec3, direction: DVec3) -> Option<f64> {
+    let towards = carriage_middle(frame) - origin;
+    let sides = [
+        (frame.forward(), CARRIAGE_LENGTH as f64 / 2.0),
+        (frame.right(), CARRIAGE_WIDTH as f64 / 2.0),
+        (frame.up(), CARRIAGE_HEIGHT as f64 / 2.0),
+    ];
+
+    let mut enters = 0.0f64;
+    let mut leaves = f64::INFINITY;
+
+    for (axis, half) in sides {
+        let centre = towards.dot(axis);
+        let along = direction.dot(axis);
+
+        // Square to this pair of faces, so the ray crosses neither: it is between them for its
+        // whole length or outside them for all of it, and dividing would give a nothing over
+        // nothing on the faces themselves.
+        if along.abs() < f64::EPSILON {
+            if centre.abs() > half {
+                return None;
+            }
+            continue;
+        }
+
+        let (near, far) = ((centre - half) / along, (centre + half) / along);
+        enters = enters.max(near.min(far));
+        leaves = leaves.min(near.max(far));
+    }
+
+    (enters <= leaves).then_some(enters)
 }
 
 fn toggle_trains(keys: Res<ButtonInput<KeyCode>>, mut trains: ResMut<Trains>) {
@@ -610,3 +677,88 @@ fn label_trains(
 
 #[cfg(test)]
 mod tests;
+
+/// How near a carriage the cursor has to be to count as on it, in pixels, for a carriage the
+/// ray misses because it is drawn too small to aim at. The editor's discs use ten for a point
+/// a few pixels across, and a distant train is one of those.
+const PICK_PIXELS: f32 = 12.0;
+
+/// The carriage under the cursor and where it stands, if the cursor is on one.
+///
+/// A ray through the cursor against each carriage's own box, see ray_into_carriage, and the
+/// nearest hit along it. The reach was a disc on screen as wide as the carriage is long, which
+/// at 24 m long and 7 m tall lit a train from twelve metres over its roof and shrank to nothing
+/// end on, where the length projects to nothing and the 4 m of width and 7 m of height are all
+/// there is. What the eye is looking at is a box, so a box is what answers.
+///
+/// Nearest along the ray, not nearest on screen: where two lines cross, the carriage in front
+/// is the one the pointer is on, which the pixels between two centres cannot say.
+///
+/// Where the ray hits nothing at all, a carriage within PICK_PIXELS of the cursor on screen
+/// still counts, so that a train a few pixels across stays something that can be clicked. A
+/// real hit beats one of those however near the miss.
+#[allow(clippy::too_many_arguments)]
+pub fn carriage_under(
+    trains: &Trains,
+    splines: &TrackSplines,
+    camera: &Camera,
+    camera_global: &GlobalTransform,
+    cell_origin: DVec3,
+    camera_position: DVec3,
+    cursor: Vec2,
+) -> Option<(Entity, DVec3)> {
+    // The ray comes back in the camera's own cell, which is the frame the projection below
+    // works in too, so its origin is lifted to where the carriages are measured from.
+    let ray = camera
+        .viewport_to_world(camera_global, cursor)
+        .ok()
+        .map(|ray| {
+            (
+                ray.origin.as_dvec3() + cell_origin,
+                ray.direction.as_dvec3(),
+            )
+        });
+    let mut hit: Option<(Entity, DVec3, f64)> = None;
+    let mut missed: Option<(Entity, DVec3, f32)> = None;
+
+    for train in &trains.trains {
+        let Some(carriage) = train.entity else {
+            continue;
+        };
+        let Some(spline) = splines.splines.get(train.line).and_then(Option::as_ref) else {
+            continue;
+        };
+
+        let frame = carriage_frame(spline, train);
+        let middle = carriage_middle(&frame);
+
+        // Over the horizon the planet hides the carriage, though a ray reaches it all the same
+        // and it still projects onto the screen; the labels test their roof the same way.
+        if (camera_position - middle).dot(middle) < 0.0 {
+            continue;
+        }
+
+        if let Some((origin, direction)) = ray
+            && let Some(distance) = ray_into_carriage(&frame, origin, direction)
+        {
+            if hit.is_none_or(|(_, _, nearest)| distance < nearest) {
+                hit = Some((carriage, frame.position, distance));
+            }
+            continue;
+        }
+
+        let Ok(on_screen) =
+            camera.world_to_viewport(camera_global, (middle - cell_origin).as_vec3())
+        else {
+            continue;
+        };
+
+        let distance = on_screen.distance(cursor);
+        if distance <= PICK_PIXELS && missed.is_none_or(|(_, _, nearest)| distance < nearest) {
+            missed = Some((carriage, frame.position, distance));
+        }
+    }
+
+    hit.map(|(carriage, position, _)| (carriage, position))
+        .or_else(|| missed.map(|(carriage, position, _)| (carriage, position)))
+}

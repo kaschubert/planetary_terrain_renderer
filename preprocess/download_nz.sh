@@ -50,6 +50,17 @@ command -v rclone >/dev/null || {
     exit 1
 }
 
+DATASET="$DIR/source_data/nz"
+
+# The dataset directory may be a symlink to storage outside the repository. A dangling
+# symlink means that storage is not mounted, which the mkdir in fetch would otherwise
+# report only as "File exists".
+[ ! -L "$DATASET" ] || [ -d "$DATASET" ] || {
+    echo "$DATASET points at $(readlink "$DATASET"), which is not mounted." >&2
+    echo "Connect the drive holding the datasets and run this again." >&2
+    exit 1
+}
+
 filters() { # restrict to .tiff, and to the requested Topo50 sheets if any
     if ((${#SHEETS[@]} == 0)); then
         printf '%s\n' --include '*.tiff'
@@ -79,5 +90,5 @@ fetch() { # <src> <dest> <attachment> [level]
     write_manifest "$dest" "$src" "$attachment" "$level"
 }
 
-fetch "$ELEVATION" "$DIR/source_data/nz/height" height
-fetch "$IMAGERY" "$DIR/source_data/nz/albedo" albedo
+fetch "$ELEVATION" "$DATASET/height" height
+fetch "$IMAGERY" "$DATASET/albedo" albedo

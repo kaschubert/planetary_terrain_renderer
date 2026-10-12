@@ -3,10 +3,10 @@
 //! user asks for the camera back.
 //!
 //! The pose comes from the same frame the carriage stands in, see carriage_frame, so the
-//! camera and the carriage agree: the eye sits on an orbit round the carriage, by default
-//! behind and above it along the frame's own axes, and looks at a point a little past it,
-//! so the carriage sits in the lower half of the view and the line beyond is what the
-//! viewer watches. A drag turns the orbit round the carriage's up and tilts it, the wheel
+//! camera and the carriage agree: the eye sits on an orbit round the middle of the carriage,
+//! by default behind and above it along the frame's own axes, and looks straight at it, so
+//! the carriage holds the centre of the view however far the orbit is turned or drawn out.
+//! A drag turns the orbit round the carriage's up and tilts it, the wheel
 //! or a drag with the middle button draws it in or out, see Orbit. The heading the orbit is
 //! built on is smoothed towards the frame's with an exponential lag, so that the swing round
 //! when a train reverses at the end of its line carries the eye round the carriage over
@@ -31,14 +31,19 @@
 //! the editor's panel lets go without either module knowing of the other.
 
 use super::table::FollowButton;
-use super::{Trains, carriage_frame};
+use super::{Train, TrainLabel, Trains, carriage_frame, carriage_middle, carriage_under};
 use crate::plugins::auckland_rail::AucklandRail;
 use crate::plugins::provenance::ascii;
+use crate::plugins::rail_editor::RailEditor;
+use crate::plugins::rail_editor::clicks::ClickDetector;
 use crate::plugins::track_frames::{TrackFrame, TrackSplines, move_to};
+use bevy::platform::collections::HashMap;
 use bevy::{
     input::mouse::{AccumulatedMouseMotion, MouseScrollUnit, MouseWheel},
     math::{DMat3, DQuat, DVec3},
     prelude::*,
+    ui::{ComputedNode, UiGlobalTransform},
+    window::PrimaryWindow,
 };
 use bevy_terrain::prelude::*;
 use big_space::prelude::{CellCoord, Grids};
@@ -49,15 +54,10 @@ use big_space::prelude::{CellCoord, Grids};
 /// The two together are the default orbit's distance and pitch, see Orbit.
 pub const CHASE_BACK: f64 = 60.0;
 
-/// How far above the rail the eye starts, along the heading's up, in metres: high enough to
-/// see over the carriage to the track ahead, low enough that the view is of a train and not
-/// of a map.
+/// How far above the carriage's middle the eye starts, along the heading's up, in metres:
+/// high enough to see over the carriage to the track ahead, low enough that the view is of a
+/// train and not of a map.
 pub const CHASE_UP: f64 = 25.0;
-
-/// How far past the carriage the camera looks, in metres, along the view's bearing, so that
-/// the carriage sits in the lower half of the frame and the line beyond is what the viewer
-/// watches, from whichever side the orbit has come round to.
-pub const CHASE_AHEAD: f64 = 20.0;
 
 /// The time constant of the heading's lag behind the carriage's, in seconds: each second the
 /// heading closes all but e to the minus three of the turn left, so a train reversing at the
@@ -71,8 +71,8 @@ pub const CHASE_SMOOTHING: f64 = 0.3;
 pub const TURN_PER_PIXEL: f64 = 0.005;
 
 /// How flat the orbit may lie and how steeply it may look down, in degrees above the
-/// carriage's level. On the rail itself the ground hides the train; straight down leaves the
-/// view no bearing to keep the carriage in its lower half by.
+/// carriage's level. On the rail itself the ground hides the train; straight down leaves
+/// looking_at a forward along its own up, which has no level right to cross with.
 pub const PITCH_DEGREES: (f64, f64) = (5.0, 85.0);
 
 /// How near the eye may be, in metres: nearer than 20 m a 24 m carriage no longer fits the
@@ -101,6 +101,16 @@ impl Plugin for ChaseCameraPlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<ChaseCamera>()
             .add_systems(Update, press_follow_buttons)
+            // After the transforms propagate, as everything that measures a click on screen
+            // is: a train is picked by projecting it, so it wants the camera settled where it
+            // is this frame.
+            .init_resource::<LitCarriage>()
+            .add_systems(
+                PostUpdate,
+                (light_the_train_under_the_pointer, follow_on_click)
+                    .chain()
+                    .after(TransformSystems::Propagate),
+            )
             // Before the transforms propagate, beside place_trains: the library's camera
             // controllers are not exported to order after, and PostUpdate is after
             // everything in Update without naming any of it, the controllers and the
@@ -278,20 +288,24 @@ pub fn chase_heading(frame: &TrackFrame, dt: f64, previous: Option<DQuat>) -> DQ
     }
 }
 
-/// The camera's pose on its orbit round a carriage at a position, on a heading. The view's
-/// bearing is the heading's forward turned round its up by the orbit's yaw, so from behind
-/// it is the train's way and from the side it is across the train; the eye sits the orbit's
-/// distance back along that bearing and up by its pitch, and looks at the point CHASE_AHEAD
-/// past the carriage along it, with the heading's up as up. While the heading swings round
-/// at the end of a line the whole orbit goes round with it, so the carriage stays in the
-/// view the whole way.
-pub fn chase_pose(position: DVec3, heading: DQuat, orbit: &Orbit) -> (DVec3, DQuat) {
+/// The camera's pose on its orbit round a point, on a heading. The view's bearing is the
+/// heading's forward turned round its up by the orbit's yaw, so from behind it is the train's
+/// way and from the side it is across the train; the eye sits the orbit's distance back along
+/// that bearing and up by its pitch, and looks at the point itself, with the heading's up as
+/// up. While the heading swings round at the end of a line the whole orbit goes round with it,
+/// so the carriage stays in the view the whole way.
+///
+/// A true orbit, now that the eye looks at what it goes round: the distance is the distance
+/// from the carriage and the pitch the angle it is seen from, rather than being a back and an
+/// up that the look-at then tilted away from. The caller passes carriage_middle, so what holds
+/// the centre of the view is the body of the carriage and not the rail under it.
+pub fn chase_pose(middle: DVec3, heading: DQuat, orbit: &Orbit) -> (DVec3, DQuat) {
     let up = heading * DVec3::Y;
     let bearing = DQuat::from_axis_angle(up, orbit.yaw) * (heading * DVec3::NEG_Z);
-    let eye = position - bearing * (orbit.distance * orbit.pitch.cos())
+    let eye = middle - bearing * (orbit.distance * orbit.pitch.cos())
         + up * (orbit.distance * orbit.pitch.sin());
 
-    (eye, looking_at(eye, position + bearing * CHASE_AHEAD, up))
+    (eye, looking_at(eye, middle, up))
 }
 
 /// Gives the view back: the camera free, and the orbital camera on again if it was when the
@@ -302,6 +316,327 @@ fn let_go(chase: &mut ChaseCamera, orbital: &mut OrbitalCameraController, hand_b
         orbital.enabled = chase.orbital_was_on;
     }
     *chase = ChaseCamera::default();
+}
+
+/// Follows this carriage, or lets go of it when it is the one already followed.
+///
+/// Shared by the table's icon and by a click on the train itself, so that the two cannot come
+/// to mean different things. Attaching takes the view from both controllers, see the module
+/// doc, and starts the orbit where orbit_on_attach says.
+fn attach_or_release(
+    carriage: Entity,
+    train: &Train,
+    chase: &mut ChaseCamera,
+    orbital: &mut OrbitalCameraController,
+    fly: &mut Query<&mut DebugCameraController>,
+    rail: &AucklandRail,
+) {
+    match follow_or_let_go(chase.following, carriage) {
+        Some(carriage) => {
+            // Switching trains keeps what was found at the first attach, since the controller
+            // is off now by the chase's own hand, and keeps the zoom, see orbit_on_attach.
+            let (orbital_was_on, orbit) = if chase.following.is_some() {
+                (chase.orbital_was_on, orbit_on_attach(Some(&chase.orbit)))
+            } else {
+                (orbital.enabled, orbit_on_attach(None))
+            };
+            *chase = ChaseCamera {
+                following: Some(carriage),
+                orbital_was_on,
+                orbit,
+                ..default()
+            };
+            orbital.enabled = false;
+            for mut fly in fly.iter_mut() {
+                fly.enabled = false;
+            }
+            let name = ascii(train.line_name(rail));
+            let unit = ascii(&train.id);
+            info!("trains: chase camera on the {name} train {unit}");
+        }
+        None => {
+            let_go(chase, orbital, true);
+            info!("trains: chase camera let go");
+        }
+    }
+}
+
+/// The labels floating over the trains, which are as clickable as the trains under them.
+type TrainLabels<'world, 'state> = Query<
+    'world,
+    'state,
+    (
+        &'static ComputedNode,
+        &'static UiGlobalTransform,
+        &'static Visibility,
+    ),
+    With<TrainLabel>,
+>;
+
+/// The carriage whose label the pointer is over, if any.
+///
+/// A label is a name written over a train, so clicking it can only have meant that train. It is
+/// measured here rather than left to Bevy's Interaction for the reason the photo markers' cards
+/// are: a label sits wherever the stack happens to put it, and the topmost node under the
+/// pointer takes a press and stops.
+///
+/// ComputedNode and UiGlobalTransform are in physical pixels and the cursor is in logical ones,
+/// so the rectangle is scaled back before the two are compared. Nothing else in this example
+/// mixes the units and gets away with it.
+fn label_under(cursor: Vec2, trains: &Trains, labels: &TrainLabels) -> Option<Entity> {
+    trains.trains.iter().find_map(|train| {
+        let (node, transform, visibility) = labels.get(train.label?).ok()?;
+        if *visibility != Visibility::Visible {
+            return None;
+        }
+
+        let scale = node.inverse_scale_factor();
+        let rect = Rect::from_center_size(transform.translation * scale, node.size() * scale);
+
+        rect.contains(cursor).then_some(train.entity).flatten()
+    })
+}
+
+/// How much brighter a carriage is drawn while the pointer is on it. Emissive rather than a
+/// lighter base colour, so that it reads as the model lighting up and not as its paint changing,
+/// and gentle, because the point is to say "this can be clicked" and not to shout.
+const HOVER_GLOW: LinearRgba = LinearRgba::rgb(0.22, 0.22, 0.24);
+
+/// What one of the carriage's meshes was drawn with before the pointer landed on it, kept on the
+/// mesh so that it can be put back without knowing which carriage it belonged to.
+#[derive(Component)]
+struct Unlit(Handle<StandardMaterial>);
+
+/// The brightened copy of each of the model's materials, made the first time it is wanted and
+/// kept. The carriages share one scene, so this is a handful of materials however many trains
+/// there are, and the pointer moving between them costs a lookup rather than a new asset.
+#[derive(Resource, Default)]
+struct LitCarriage(HashMap<AssetId<StandardMaterial>, Handle<StandardMaterial>>);
+
+/// Lights the train under the pointer, and puts the last one back.
+///
+/// The carriages are one glTF scene spawned many times, so they share their material handles:
+/// brightening a material would brighten every train at once. Each mesh of the lit carriage gets
+/// a brightened copy swapped in instead, and its own handle written down beside it to put back.
+#[allow(clippy::too_many_arguments)]
+fn light_the_train_under_the_pointer(
+    mut commands: Commands,
+    mut lit: Local<Option<Entity>>,
+    mut cache: ResMut<LitCarriage>,
+    mut materials: ResMut<Assets<StandardMaterial>>,
+    trains: Res<Trains>,
+    splines: Res<TrackSplines>,
+    rail: Res<AucklandRail>,
+    capture: Res<PointerCapture>,
+    window: Query<&Window, With<PrimaryWindow>>,
+    grids: Grids,
+    camera: Query<
+        (Entity, &Camera, &GlobalTransform, &Transform, &CellCoord),
+        With<OrbitalCameraController>,
+    >,
+    labels: TrainLabels,
+    children: Query<&Children>,
+    mut meshes: Query<(&mut MeshMaterial3d<StandardMaterial>, Option<&Unlit>)>,
+) {
+    let under = under_the_pointer(
+        &trains, &splines, &rail, &capture, &window, &grids, &camera, &labels,
+    );
+    if under == *lit {
+        return;
+    }
+
+    if let Some(was) = lit.take() {
+        for mesh in children.iter_descendants(was) {
+            let Ok((mut material, Some(unlit))) = meshes.get_mut(mesh) else {
+                continue;
+            };
+            material.0 = unlit.0.clone();
+            commands.entity(mesh).remove::<Unlit>();
+        }
+    }
+
+    let Some(carriage) = under else {
+        return;
+    };
+    for mesh in children.iter_descendants(carriage) {
+        let Ok((mut material, None)) = meshes.get_mut(mesh) else {
+            continue;
+        };
+        let Some(brighter) = brighter(material.0.id(), &mut cache, &mut materials) else {
+            continue;
+        };
+
+        commands.entity(mesh).insert(Unlit(material.0.clone()));
+        material.0 = brighter;
+    }
+    *lit = under;
+}
+
+/// The brightened copy of a material, made once and kept. None while the original has not
+/// loaded, which is the frame or two before a carriage first draws.
+fn brighter(
+    original: AssetId<StandardMaterial>,
+    cache: &mut LitCarriage,
+    materials: &mut Assets<StandardMaterial>,
+) -> Option<Handle<StandardMaterial>> {
+    if let Some(brighter) = cache.0.get(&original) {
+        return Some(brighter.clone());
+    }
+
+    let mut lit = materials.get(original)?.clone();
+    lit.emissive += HOVER_GLOW;
+    let handle = materials.add(lit);
+    cache.0.insert(original, handle.clone());
+
+    Some(handle)
+}
+
+/// The carriage the pointer is on, by its label or by the train itself, if the trains are drawn
+/// and the pointer is not somebody else's UI.
+#[allow(clippy::too_many_arguments)]
+fn under_the_pointer(
+    trains: &Trains,
+    splines: &TrackSplines,
+    rail: &AucklandRail,
+    capture: &PointerCapture,
+    window: &Query<&Window, With<PrimaryWindow>>,
+    grids: &Grids,
+    camera: &Query<
+        (Entity, &Camera, &GlobalTransform, &Transform, &CellCoord),
+        With<OrbitalCameraController>,
+    >,
+    labels: &TrainLabels,
+) -> Option<Entity> {
+    if !trains.drawn(rail) {
+        return None;
+    }
+    let cursor = window.single().ok()?.cursor_position()?;
+
+    // A train's own label is not somebody else's UI, so it is asked about before the capture is
+    // consulted; anything else over the pointer is, and stops this here.
+    if let Some(carriage) = label_under(cursor, trains, labels) {
+        return Some(carriage);
+    }
+    if capture.blocks_pointer() {
+        return None;
+    }
+    let (entity, camera, global, transform, cell) = camera.single().ok()?;
+    let grid = grids.parent_grid(entity)?;
+
+    let cell_origin = grid.cell_to_float(cell);
+    let camera_position = grid.grid_position_double(cell, transform);
+
+    carriage_under(
+        trains,
+        splines,
+        camera,
+        global,
+        cell_origin,
+        camera_position,
+        cursor,
+    )
+    .map(|(carriage, _)| carriage)
+}
+
+/// A plain click on a train in the view follows it, as its icon in the table does, and lets go
+/// when it is the one already followed.
+///
+/// The train has to be found by a cast of the plugin's own rather than by the picking pass,
+/// which reads the terrain's own depth and sees straight through a carriage; carriage_under
+/// sends a ray through the cursor at each carriage's box, see ray_into_carriage.
+///
+/// The name floating over a train counts as the train: clicking a label follows it, and the
+/// label does not count as the UI having the pointer, or the press that selects a train would be
+/// thrown away by the very thing it landed on.
+///
+/// Three things are left alone. A drag is the camera's, which the editor's click rules tell
+/// apart from a click. A press over anyone else's UI belongs to them. And Control is the photo
+/// markers' chord for standing a marker on a train, so a Ctrl+click is theirs and not a follow.
+/// The rail editor is stood aside from too: its points sit on the very rails the trains run
+/// along, so a click there would both pick a point and take the camera away from it.
+#[allow(clippy::too_many_arguments)]
+fn follow_on_click(
+    mut chase: ResMut<ChaseCamera>,
+    trains: Res<Trains>,
+    splines: Res<TrackSplines>,
+    rail: Res<AucklandRail>,
+    editor: Option<Res<RailEditor>>,
+    buttons: Res<ButtonInput<MouseButton>>,
+    keys: Res<ButtonInput<KeyCode>>,
+    capture: Res<PointerCapture>,
+    time: Res<Time<Real>>,
+    mut clicks: Local<ClickDetector>,
+    window: Query<&Window, With<PrimaryWindow>>,
+    grids: Grids,
+    camera: Query<
+        (Entity, &Camera, &GlobalTransform, &Transform, &CellCoord),
+        With<OrbitalCameraController>,
+    >,
+    labels: TrainLabels,
+    mut orbital: Query<&mut OrbitalCameraController>,
+    mut fly: Query<&mut DebugCameraController>,
+) {
+    let Ok(window) = window.single() else {
+        return;
+    };
+    let Some(cursor) = window.cursor_position() else {
+        return;
+    };
+    let now = time.elapsed_secs_f64();
+
+    if buttons.just_pressed(MouseButton::Left) {
+        let chord = keys.pressed(KeyCode::ControlLeft) || keys.pressed(KeyCode::ControlRight);
+        let ours = label_under(cursor, &trains, &labels).is_some();
+
+        clicks.press(cursor, now, (capture.blocks_pointer() && !ours) || chord);
+    }
+    if !buttons.just_released(MouseButton::Left) {
+        return;
+    }
+    let Some(click) = clicks.release(cursor, now) else {
+        return;
+    };
+
+    if !trains.drawn(&rail) || editor.is_some_and(|editor| editor.editing) {
+        return;
+    }
+    let Ok((entity, camera, global, transform, cell)) = camera.single() else {
+        return;
+    };
+    let Some(grid) = grids.parent_grid(entity) else {
+        return;
+    };
+
+    let cell_origin = grid.cell_to_float(cell);
+    let camera_position = grid.grid_position_double(cell, transform);
+
+    // The label first, since a click on a train's name can only have meant that train.
+    let Some(carriage) = label_under(click.position(), &trains, &labels).or_else(|| {
+        carriage_under(
+            &trains,
+            &splines,
+            camera,
+            global,
+            cell_origin,
+            camera_position,
+            click.position(),
+        )
+        .map(|(carriage, _)| carriage)
+    }) else {
+        return;
+    };
+    let Some(train) = trains
+        .trains
+        .iter()
+        .find(|train| train.entity == Some(carriage))
+    else {
+        return;
+    };
+    let Ok(mut orbital) = orbital.single_mut() else {
+        return;
+    };
+
+    attach_or_release(carriage, train, &mut chase, &mut orbital, &mut fly, &rail);
 }
 
 /// A press on a train's icon follows that train, or lets go of it when it is the one
@@ -330,35 +665,7 @@ fn press_follow_buttons(
             return;
         };
 
-        match follow_or_let_go(chase.following, carriage) {
-            Some(carriage) => {
-                // Switching trains keeps what was found at the first attach, since the
-                // controller is off now by the chase's own hand, and keeps the zoom, see
-                // orbit_on_attach.
-                let (orbital_was_on, orbit) = if chase.following.is_some() {
-                    (chase.orbital_was_on, orbit_on_attach(Some(&chase.orbit)))
-                } else {
-                    (orbital.enabled, orbit_on_attach(None))
-                };
-                *chase = ChaseCamera {
-                    following: Some(carriage),
-                    orbital_was_on,
-                    orbit,
-                    ..default()
-                };
-                orbital.enabled = false;
-                for mut fly in &mut fly {
-                    fly.enabled = false;
-                }
-                let name = ascii(train.line_name(&rail));
-                let unit = ascii(&train.id);
-                info!("trains: chase camera on the {name} train {unit}");
-            }
-            None => {
-                let_go(&mut chase, &mut orbital, true);
-                info!("trains: chase camera let go");
-            }
-        }
+        attach_or_release(carriage, train, &mut chase, &mut orbital, &mut fly, &rail);
     }
 }
 
@@ -471,7 +778,7 @@ fn follow_train(
 
     let frame = carriage_frame(spline, train);
     let heading = chase_heading(&frame, time.delta_secs_f64(), chase.heading);
-    let (position, rotation) = chase_pose(frame.position, heading, &chase.orbit);
+    let (position, rotation) = chase_pose(carriage_middle(&frame), heading, &chase.orbit);
     chase.heading = Some(heading);
     chase.written = Some((position, rotation));
     move_to(

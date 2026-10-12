@@ -227,7 +227,10 @@ impl Default for SheetGrid {
     fn default() -> Self {
         Self {
             sheets: default(),
-            visible: true,
+            // Off until asked for. It is a reference overlay rather than part of the
+            // terrain, and it draws a label per sheet over the whole country, so it starts
+            // out of the way: F3, or the checkbox in the F2 panel.
+            visible: false,
             height: 100.0,
             wheel_adjusts_height: false,
         }

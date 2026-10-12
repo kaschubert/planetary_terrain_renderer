@@ -3,6 +3,7 @@
 //! in shared; what only one uses lives with it, as the rail editor's frame does.
 
 pub mod auckland_rail;
+pub mod camera_pose;
 pub mod live_trains;
 pub mod photo_markers;
 pub mod provenance;

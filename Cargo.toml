@@ -51,7 +51,12 @@ wgpu-core = { version = "29", optional = true } # keep in sync with bevy's wgpu
 # unifies the features into the bevy above when building examples. The dev tools are for
 # the fps overlay; jpeg is for the carriage model's textures, examples/spherical/plugins/trains.rs,
 # and for the photos dropped on the markers, which Bevy's default image formats leave out.
-bevy = { version = "0.19.1", features = ["bevy_dev_tools", "jpeg"] }
+# debug and track_location are what make Bevy's own warnings legible: without debug the
+# component names in them read "<Enable the debug feature to see the name>", and
+# track_location prefixes each one with the file and line that inserted the component.
+# Both cost compile time and a little memory per entity, so they belong here rather than
+# in the library's features.
+bevy = { version = "0.19.1", features = ["bevy_dev_tools", "jpeg", "debug", "track_location"] }
 # For the overlay's copy button.
 arboard = "3.6"
 # The rail editor's move gizmo, examples/spherical/plugins/rail_editor/move_gizmo.rs. 0.11 is the
@@ -70,6 +75,12 @@ serde_json = "1"
 # bevy_image builds, with the codecs the jpeg feature above and bevy's own defaults turn on, so
 # nothing new is compiled.
 image = { version = "0.25", default-features = false }
+# The photo markers' scatter button, examples/spherical/plugins/photo_markers/scatter.rs, which
+# fills the view with test markers. Same version the optional dependency above resolves to, so
+# nothing new is pulled in; it is here rather than behind the feature because the spherical
+# example does not ask for one.
+rand = "0.9"
+
 
 [[example]]
 name = "spherical"
