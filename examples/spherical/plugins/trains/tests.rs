@@ -121,6 +121,65 @@ fn the_model_faces_along_the_frame_and_stands_on_the_rail_at_a_cars_length() {
     assert!(((nose - tail).length() - CARRIAGE_LENGTH).abs() < 1e-4);
     assert!((nose - tail).z < 0.0, "the nose is not forward");
     assert!(nose.x.abs() < 1e-5 && tail.x.abs() < 1e-5);
+
+    // And its width runs across the frame, along the X the frame's right is, which is the
+    // third side of the box the pointer is tested against.
+    let across = transform.transform_point(Vec3::new(0.0, 0.0, MODEL_MAX.z))
+        - transform.transform_point(Vec3::new(0.0, 0.0, MODEL_MIN.z));
+    assert!((across.length() - CARRIAGE_WIDTH).abs() < 1e-4, "{across}");
+    assert!(across.y.abs() < 1e-5 && across.z.abs() < 1e-5, "{across}");
+}
+
+/// What the pointer is tested against is the carriage's own box and not a disc as wide as the
+/// carriage is long: a ray along each of the frame's three axes enters at half that side, a ray
+/// passing outside any one of the three misses however square it is on the other two, and a ray
+/// aimed away from the carriage misses whatever it points along.
+#[test]
+fn a_ray_enters_the_carriages_own_box_and_misses_just_outside_it() {
+    let line = eastward(21, 50.0, |_| 20.0);
+    let spline = TrackSpline::through(&line).unwrap();
+    let frame = spline.frame_at(500.0);
+    let middle = carriage_middle(&frame);
+    let gap = 100.0;
+
+    // Head on, from the side and from above: each enters at half its own side of the box.
+    for (axis, half) in [
+        (frame.forward(), CARRIAGE_LENGTH as f64 / 2.0),
+        (frame.right(), CARRIAGE_WIDTH as f64 / 2.0),
+        (frame.up(), CARRIAGE_HEIGHT as f64 / 2.0),
+    ] {
+        let origin = middle + axis * gap;
+        let enters = ray_into_carriage(&frame, origin, -axis).expect("a ray straight at it");
+        assert!(
+            (enters - (gap - half)).abs() < 1e-6,
+            "entered at {enters} rather than {}",
+            gap - half
+        );
+
+        // The same ray turned round points away from the carriage and reaches nothing.
+        assert!(ray_into_carriage(&frame, origin, axis).is_none());
+    }
+
+    // Past the roof and past the side. The reach used to be half the carriage's length on
+    // screen, so a pointer twelve metres over the roof of a 7 m carriage was on it.
+    for off in [
+        frame.up() * (CARRIAGE_HEIGHT as f64 / 2.0 + 0.1),
+        frame.up() * 12.0,
+        frame.right() * (CARRIAGE_WIDTH as f64 / 2.0 + 0.1),
+    ] {
+        let origin = middle + off + frame.forward() * gap;
+        assert!(
+            ray_into_carriage(&frame, origin, -frame.forward()).is_none(),
+            "a ray {:.1} m off the middle hit the carriage",
+            off.length()
+        );
+    }
+
+    // Started inside one, as a camera flown into a carriage gives, is no distance at all.
+    assert_eq!(
+        ray_into_carriage(&frame, middle, frame.forward()),
+        Some(0.0)
+    );
 }
 
 /// At the same distance, the carriage heading out and the carriage heading back stand on

@@ -541,9 +541,9 @@ fn under_the_pointer(
 /// A plain click on a train in the view follows it, as its icon in the table does, and lets go
 /// when it is the one already followed.
 ///
-/// The train has to be found on screen rather than by the picking pass, which reads the
-/// terrain's own depth and sees straight through a carriage; carriage_under projects them and
-/// measures, the way the markers and the editor's discs are picked.
+/// The train has to be found by a cast of the plugin's own rather than by the picking pass,
+/// which reads the terrain's own depth and sees straight through a carriage; carriage_under
+/// sends a ray through the cursor at each carriage's box, see ray_into_carriage.
 ///
 /// The name floating over a train counts as the train: clicking a label follows it, and the
 /// label does not count as the UI having the pointer, or the press that selects a train would be
