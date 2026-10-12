@@ -1,4 +1,5 @@
 use bevy::dev_tools::fps_overlay::FpsOverlayPlugin;
+use bevy::feathers::{FeathersPlugins, dark_theme::create_dark_theme, theme::UiTheme};
 use bevy::text::FontSize;
 use bevy::window::WindowResolution;
 use bevy::{prelude::*, reflect::TypePath, render::render_resource::*, shader::ShaderRef};
@@ -16,6 +17,7 @@ use plugins::provenance::ProvenancePlugin;
 use plugins::rail_editor::RailEditorPlugin;
 use plugins::sheet_grid::SheetGridPlugin;
 use plugins::stations::StationsPlugin;
+use plugins::tab_panel::TabPanelPlugin;
 use plugins::track_frames::TrackFramesPlugin;
 use plugins::trains::TrainsPlugin;
 use plugins::vram_usage::VramUsagePlugin;
@@ -149,7 +151,12 @@ fn main() {
                 // The carriages where Auckland Transport's feed puts the trains, on F8, with
                 // the key from AT_API_KEY; tests.rs adds it without one, so it never fetches.
                 LiveTrainsPlugin::from_env(),
+                TabPanelPlugin,      // the tabbed panel of settings and readouts, on F11
             ),
+            // Bevy's own widget set and theme, which the F11 panel is built from. The
+            // group is TabNavigationPlugin and FeathersCorePlugin; InputDispatchPlugin,
+            // which the widgets' focus needs, is in DefaultPlugins already.
+            FeathersPlugins,
             TerrainPickingPlugin,
             // The move gizmo's arrows, see rail_editor/move_gizmo.rs. Added here and not by
             // RailEditorPlugin so that tests.rs can run the editor without a renderer, which
@@ -169,6 +176,11 @@ fn main() {
             ..TerrainSettings::new(vec!["albedo"])
         })
         // .insert_resource(ClearColor(Color::WHITE))
+        // Feathers has no theme of its own until one is given: UiTheme is empty by
+        // default and every token in it resolves to a warning and a fuchsia, so the
+        // dark theme goes in beside the plugins rather than being left to a widget to
+        // notice. Dark because the F11 panel sits over the terrain with the rest.
+        .insert_resource(UiTheme(create_dark_theme()))
         .add_systems(Startup, (initialize, spawn_hotkey_list))
         .add_systems(Update, (stream_terrains, toggle_hotkey_list))
         .run();

@@ -56,7 +56,16 @@ wgpu-core = { version = "29", optional = true } # keep in sync with bevy's wgpu
 # track_location prefixes each one with the file and line that inserted the component.
 # Both cost compile time and a little memory per entity, so they belong here rather than
 # in the library's features.
-bevy = { version = "0.19.1", features = ["bevy_dev_tools", "jpeg", "debug", "track_location"] }
+# bevy_feathers is Bevy's own widget set and theme, which the F11 panel is built from,
+# examples/spherical/plugins/tab_panel.rs. It is off by default and brings bevy_ui_widgets
+# with it, whose Slider two panels here already use.
+bevy = { version = "0.19.1", features = [
+    "bevy_dev_tools",
+    "bevy_feathers",
+    "jpeg",
+    "debug",
+    "track_location",
+] }
 # For the overlay's copy button.
 arboard = "3.6"
 # The rail editor's move gizmo, examples/spherical/plugins/rail_editor/move_gizmo.rs. 0.11 is the

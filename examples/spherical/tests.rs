@@ -27,6 +27,7 @@ fn every_system_initialises_without_a_query_conflict() {
         PhotoMarkersPlugin,
         TrainsPlugin,
         LiveTrainsPlugin::offline(),
+        TabPanelPlugin,
     ));
     app.update();
 }
