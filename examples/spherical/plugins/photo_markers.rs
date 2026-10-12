@@ -46,7 +46,9 @@ use card::{CardPlace, EMPTY_ASPECT, MarkerCard, card_under};
 mod card;
 mod file;
 mod layout;
-mod panel;
+// Visible to the crate for its button look, which camera_pose's buttons take from here so
+// that a retune reaches them all.
+pub(crate) mod panel;
 mod photo;
 mod scatter;
 mod season;

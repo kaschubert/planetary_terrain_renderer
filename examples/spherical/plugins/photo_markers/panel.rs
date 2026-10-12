@@ -78,7 +78,7 @@ const MARGIN: f32 = 6.0;
 
 /// The buttons' colours, the editor panel's: the panel is black at half alpha, so a button has
 /// to be lighter than that to read as one, and hover and press lighten it further.
-const BUTTON_COLOUR: Color = Color::srgba(0.25, 0.25, 0.25, 0.8);
+pub(crate) const BUTTON_COLOUR: Color = Color::srgba(0.25, 0.25, 0.25, 0.8);
 const HOVER_COLOUR: Color = Color::srgba(0.4, 0.4, 0.4, 0.9);
 const PRESSED_COLOUR: Color = Color::srgba(0.6, 0.6, 0.6, 0.9);
 const DISABLED_COLOUR: Color = Color::srgba(0.12, 0.12, 0.12, 0.6);
@@ -865,7 +865,7 @@ fn press_swatches(
     }
 }
 
-fn button_colour(interaction: Interaction, enabled: bool) -> Color {
+pub(crate) fn button_colour(interaction: Interaction, enabled: bool) -> Color {
     match (enabled, interaction) {
         (false, _) => DISABLED_COLOUR,
         (true, Interaction::Pressed) => PRESSED_COLOUR,
