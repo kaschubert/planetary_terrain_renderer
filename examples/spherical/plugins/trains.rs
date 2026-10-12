@@ -377,6 +377,13 @@ pub fn carriage_frame(spline: &TrackSpline, train: &Train) -> TrackFrame {
     offset(&facing, -TRACK_CENTRES / 2.0)
 }
 
+/// The middle of the carriage: where the chase camera looks, and what a click at a train aims
+/// at. A frame's position is on the rail, under the model's floor rather than in its body, so
+/// the middle is half a carriage's height up the frame's own up.
+pub fn carriage_middle(frame: &TrackFrame) -> DVec3 {
+    frame.position + frame.up() * (CARRIAGE_HEIGHT as f64 / 2.0)
+}
+
 fn toggle_trains(keys: Res<ButtonInput<KeyCode>>, mut trains: ResMut<Trains>) {
     if keys.just_pressed(KeyCode::F7) {
         trains.shown = !trains.shown;
@@ -646,8 +653,7 @@ pub fn carriage_under(
         };
 
         let frame = carriage_frame(spline, train);
-        // The middle of the carriage's side, which is what a click at a train aims at.
-        let middle = frame.position + frame.up() * (CARRIAGE_HEIGHT as f64 / 2.0);
+        let middle = carriage_middle(&frame);
         let Ok(on_screen) =
             camera.world_to_viewport(camera_global, (middle - cell_origin).as_vec3())
         else {

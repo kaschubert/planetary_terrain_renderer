@@ -3,10 +3,10 @@
 //! user asks for the camera back.
 //!
 //! The pose comes from the same frame the carriage stands in, see carriage_frame, so the
-//! camera and the carriage agree: the eye sits on an orbit round the carriage, by default
-//! behind and above it along the frame's own axes, and looks at a point a little past it,
-//! so the carriage sits in the lower half of the view and the line beyond is what the
-//! viewer watches. A drag turns the orbit round the carriage's up and tilts it, the wheel
+//! camera and the carriage agree: the eye sits on an orbit round the middle of the carriage,
+//! by default behind and above it along the frame's own axes, and looks straight at it, so
+//! the carriage holds the centre of the view however far the orbit is turned or drawn out.
+//! A drag turns the orbit round the carriage's up and tilts it, the wheel
 //! or a drag with the middle button draws it in or out, see Orbit. The heading the orbit is
 //! built on is smoothed towards the frame's with an exponential lag, so that the swing round
 //! when a train reverses at the end of its line carries the eye round the carriage over
@@ -31,7 +31,7 @@
 //! the editor's panel lets go without either module knowing of the other.
 
 use super::table::FollowButton;
-use super::{Train, TrainLabel, Trains, carriage_frame, carriage_under};
+use super::{Train, TrainLabel, Trains, carriage_frame, carriage_middle, carriage_under};
 use crate::plugins::auckland_rail::AucklandRail;
 use crate::plugins::provenance::ascii;
 use crate::plugins::rail_editor::RailEditor;
@@ -54,15 +54,10 @@ use big_space::prelude::{CellCoord, Grids};
 /// The two together are the default orbit's distance and pitch, see Orbit.
 pub const CHASE_BACK: f64 = 60.0;
 
-/// How far above the rail the eye starts, along the heading's up, in metres: high enough to
-/// see over the carriage to the track ahead, low enough that the view is of a train and not
-/// of a map.
+/// How far above the carriage's middle the eye starts, along the heading's up, in metres:
+/// high enough to see over the carriage to the track ahead, low enough that the view is of a
+/// train and not of a map.
 pub const CHASE_UP: f64 = 25.0;
-
-/// How far past the carriage the camera looks, in metres, along the view's bearing, so that
-/// the carriage sits in the lower half of the frame and the line beyond is what the viewer
-/// watches, from whichever side the orbit has come round to.
-pub const CHASE_AHEAD: f64 = 20.0;
 
 /// The time constant of the heading's lag behind the carriage's, in seconds: each second the
 /// heading closes all but e to the minus three of the turn left, so a train reversing at the
@@ -76,8 +71,8 @@ pub const CHASE_SMOOTHING: f64 = 0.3;
 pub const TURN_PER_PIXEL: f64 = 0.005;
 
 /// How flat the orbit may lie and how steeply it may look down, in degrees above the
-/// carriage's level. On the rail itself the ground hides the train; straight down leaves the
-/// view no bearing to keep the carriage in its lower half by.
+/// carriage's level. On the rail itself the ground hides the train; straight down leaves
+/// looking_at a forward along its own up, which has no level right to cross with.
 pub const PITCH_DEGREES: (f64, f64) = (5.0, 85.0);
 
 /// How near the eye may be, in metres: nearer than 20 m a 24 m carriage no longer fits the
@@ -293,20 +288,24 @@ pub fn chase_heading(frame: &TrackFrame, dt: f64, previous: Option<DQuat>) -> DQ
     }
 }
 
-/// The camera's pose on its orbit round a carriage at a position, on a heading. The view's
-/// bearing is the heading's forward turned round its up by the orbit's yaw, so from behind
-/// it is the train's way and from the side it is across the train; the eye sits the orbit's
-/// distance back along that bearing and up by its pitch, and looks at the point CHASE_AHEAD
-/// past the carriage along it, with the heading's up as up. While the heading swings round
-/// at the end of a line the whole orbit goes round with it, so the carriage stays in the
-/// view the whole way.
-pub fn chase_pose(position: DVec3, heading: DQuat, orbit: &Orbit) -> (DVec3, DQuat) {
+/// The camera's pose on its orbit round a point, on a heading. The view's bearing is the
+/// heading's forward turned round its up by the orbit's yaw, so from behind it is the train's
+/// way and from the side it is across the train; the eye sits the orbit's distance back along
+/// that bearing and up by its pitch, and looks at the point itself, with the heading's up as
+/// up. While the heading swings round at the end of a line the whole orbit goes round with it,
+/// so the carriage stays in the view the whole way.
+///
+/// A true orbit, now that the eye looks at what it goes round: the distance is the distance
+/// from the carriage and the pitch the angle it is seen from, rather than being a back and an
+/// up that the look-at then tilted away from. The caller passes carriage_middle, so what holds
+/// the centre of the view is the body of the carriage and not the rail under it.
+pub fn chase_pose(middle: DVec3, heading: DQuat, orbit: &Orbit) -> (DVec3, DQuat) {
     let up = heading * DVec3::Y;
     let bearing = DQuat::from_axis_angle(up, orbit.yaw) * (heading * DVec3::NEG_Z);
-    let eye = position - bearing * (orbit.distance * orbit.pitch.cos())
+    let eye = middle - bearing * (orbit.distance * orbit.pitch.cos())
         + up * (orbit.distance * orbit.pitch.sin());
 
-    (eye, looking_at(eye, position + bearing * CHASE_AHEAD, up))
+    (eye, looking_at(eye, middle, up))
 }
 
 /// Gives the view back: the camera free, and the orbital camera on again if it was when the
@@ -779,7 +778,7 @@ fn follow_train(
 
     let frame = carriage_frame(spline, train);
     let heading = chase_heading(&frame, time.delta_secs_f64(), chase.heading);
-    let (position, rotation) = chase_pose(frame.position, heading, &chase.orbit);
+    let (position, rotation) = chase_pose(carriage_middle(&frame), heading, &chase.orbit);
     chase.heading = Some(heading);
     chase.written = Some((position, rotation));
     move_to(
