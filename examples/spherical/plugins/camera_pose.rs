@@ -1,36 +1,29 @@
-//! Where the camera starts, a button to put it back there, and a pose kept on disk.
+//! Where the camera starts, the pose kept on disk, and the two functions the panel's buttons
+//! go through.
 //!
 //! Flying somewhere worth looking at takes a while, and until now a rebuild threw it away:
-//! every run opened over Auckland whatever you were working on. So there are two buttons in
-//! the F1 list — one that writes down where the camera is, one that puts it back there — and
-//! that saved pose is also where the next run opens.
+//! every run opened over Auckland whatever you were working on. So there is a pose on disk —
+//! written down where the camera is, jumped back to when asked — and that saved pose is also
+//! where the next run opens.
 //!
-//! Both the button and the startup go through [`home_pose`], which reads the file each time:
-//! one place decides where home is, and a pose edited in the file by hand can be jumped to
-//! with the button rather than a restart. With no file written yet, home is the start below.
+//! Nothing here draws anything any more. The two buttons were this plugin's, in a row the F1
+//! list left empty for them; the F11 panel's Camera tab has both as feathers buttons, so what
+//! is left is the pair of functions they go through, [`home_pose`] and [`save_pose`], and the
+//! file under them. One place still decides where home is and what writing it down means,
+//! whichever button was pressed, and a pose edited in the file by hand can be jumped to
+//! without a restart. With no file written yet, home is the start below.
 //!
-//! The buttons sit in a row the F1 list spawns and leaves empty, which this fills, as the F2
-//! panel does with the sheet grid's height controls. They are inert until F1 is up: Bevy's
-//! UI picking skips a node that is not rendered, so a hidden list neither takes clicks nor
-//! keeps them from the camera.
-//!
-//! Moving the camera is two components, [`Transform`] and [`CellCoord`], written through
-//! [`move_to`]; the orbital controller reads its pose back from them every frame and carries
-//! on from whatever it finds, so writing them is all a move takes. The file is the
-//! arrangement the photo markers use for theirs: RON beside the plugin in the source tree,
-//! written through the same atomic rename.
+//! The file is the arrangement the photo markers use for theirs: RON beside the plugin in the
+//! source tree, written through the same atomic rename.
 
-use bevy::{math::DVec3, prelude::*, text::FontSize};
+use bevy::{math::DVec3, prelude::*};
 use bevy_terrain::math::{Coordinate, unit_position};
 use bevy_terrain::prelude::*;
-use big_space::prelude::{CellCoord, Grids};
 use serde::{Deserialize, Serialize};
 use std::path::Path;
 
 use crate::plugins::auckland_rail::write_atomically;
-use crate::plugins::photo_markers::panel::{BUTTON_COLOUR, button_colour};
 use crate::plugins::shared::rail_network::utc_now;
-use crate::plugins::track_frames::move_to;
 
 /// Where the camera starts: over Auckland, looking north over the harbour from the city
 /// centre, with West and South Auckland to either side. Where home is until a pose has been
@@ -188,10 +181,14 @@ fn load_pose(path: &Path) -> Option<SavedPose> {
 
 /// Writes the pose down, stamped with the time.
 ///
+/// Public for the reason [`home_pose`] is: the button in the F1 list and the one in the F11
+/// panel's Camera tab both save through here, so there is one file, one format and one
+/// decision about what a pose is, whichever button was pressed.
+///
 /// A file that would not read is written over here, where the markers' save refuses to: this
 /// is one pose rather than a collection, so there is nothing in the old file worth keeping
 /// that the new one does not say better.
-fn save_pose(position: DVec3, rotation: Quat) {
+pub fn save_pose(position: DVec3, rotation: Quat) {
     let path = Path::new(POSE_PATH);
     let pose = SavedPose::of(position, rotation, utc_now());
 
@@ -212,108 +209,6 @@ fn save_pose(position: DVec3, rotation: Quat) {
             path.display()
         ),
         Err(error) => warn!("camera pose: {}: {error}", path.display()),
-    }
-}
-
-/// The row the F1 list leaves for these buttons. The list spawns it, this fills it.
-#[derive(Component)]
-pub struct CameraButtonRow;
-
-#[derive(Component, Clone, Copy, PartialEq, Debug)]
-struct CameraButton(Action);
-
-#[derive(Clone, Copy, PartialEq, Debug)]
-enum Action {
-    Reset,
-    Save,
-}
-
-impl Action {
-    fn caption(self) -> &'static str {
-        match self {
-            Self::Reset => "Reset camera",
-            Self::Save => "Save this view",
-        }
-    }
-}
-
-/// The two buttons, the moment the F1 list spawns the row.
-///
-/// Keyed off the row appearing rather than ordered against the list's own startup system, so
-/// that neither has to know when the other runs.
-fn spawn_buttons(mut commands: Commands, rows: Query<Entity, Added<CameraButtonRow>>) {
-    for row in &rows {
-        commands.entity(row).with_children(|row| {
-            for action in [Action::Reset, Action::Save] {
-                row.spawn((
-                    CameraButton(action),
-                    Button,
-                    Node {
-                        padding: UiRect::axes(Val::Px(6.0), Val::Px(2.0)),
-                        ..default()
-                    },
-                    BackgroundColor(BUTTON_COLOUR),
-                    children![(
-                        Text::new(action.caption()),
-                        TextFont {
-                            font_size: FontSize::Px(12.0),
-                            ..default()
-                        },
-                        TextColor(Color::WHITE),
-                    )],
-                ));
-            }
-        });
-    }
-}
-
-fn press_buttons(
-    grids: Grids,
-    mut camera: Query<(Entity, &mut Transform, &mut CellCoord), With<OrbitalCameraController>>,
-    buttons: Query<(&CameraButton, &Interaction), Changed<Interaction>>,
-) {
-    for (button, interaction) in &buttons {
-        if *interaction != Interaction::Pressed {
-            continue;
-        }
-
-        let Ok((entity, mut transform, mut cell)) = camera.single_mut() else {
-            return;
-        };
-        let Some(grid) = grids.parent_grid(entity) else {
-            return;
-        };
-
-        match button.0 {
-            // Back to the saved pose, or to the start while there is none. home_pose logs
-            // which it was, so there is nothing to add here.
-            Action::Reset => {
-                let (position, rotation) = home_pose();
-                move_to(grid, &mut cell, &mut transform, position, rotation);
-            }
-            // Read out of the two components rather than out of the controller, which keeps
-            // only the anchors a drag began from.
-            Action::Save => save_pose(
-                grid.grid_position_double(&cell, &transform),
-                transform.rotation,
-            ),
-        }
-    }
-}
-
-/// Gives the buttons their hover and press states, in the panels' own colours.
-fn colour_buttons(mut buttons: Query<(&Interaction, &mut BackgroundColor), With<CameraButton>>) {
-    for (interaction, mut background) in &mut buttons {
-        background.set_if_neq(BackgroundColor(button_colour(*interaction, true)));
-    }
-}
-
-/// The camera's start, the two buttons in the F1 list, and the pose on disk.
-pub struct CameraPosePlugin;
-
-impl Plugin for CameraPosePlugin {
-    fn build(&self, app: &mut App) {
-        app.add_systems(Update, (spawn_buttons, press_buttons, colour_buttons));
     }
 }
 
@@ -470,11 +365,5 @@ mod tests {
         );
 
         std::fs::remove_file(&path).unwrap();
-    }
-
-    #[test]
-    fn captions_say_which_button_is_which() {
-        assert_eq!(Action::Reset.caption(), "Reset camera");
-        assert_ne!(Action::Save.caption(), Action::Reset.caption());
     }
 }

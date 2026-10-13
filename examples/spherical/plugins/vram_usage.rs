@@ -1,6 +1,8 @@
-//! The gpu memory readout in the top left, with a button to copy it to the clipboard.
+//! The gpu memory readout in the top left, and the copy of it to the clipboard that the F11
+//! panel's Perf tab asks for with [`CopyStats`].
 
 use bevy::dev_tools::fps_overlay::FPS_OVERLAY_ZINDEX;
+use bevy::dev_tools::fps_overlay::FpsOverlayConfig;
 use bevy::prelude::*;
 use bevy::render::{Render, RenderApp, RenderSystems, renderer::RenderDevice};
 use bevy::text::FontSize;
@@ -23,12 +25,10 @@ struct VramUsage {
 #[derive(Component)]
 struct VramText;
 
-#[derive(Component)]
-struct CopyButton;
-
-/// The "Copied!" note next to the button, gone again once the timer runs out.
-#[derive(Component)]
-struct CopiedToast(Timer);
+/// Puts the vram line on the clipboard. Triggered by the Perf tab's button rather than one of
+/// this plugin's own, so the corner holds readings and the panel holds the controls.
+#[derive(Event)]
+pub(crate) struct CopyStats;
 
 pub struct VramUsagePlugin;
 
@@ -38,15 +38,10 @@ impl Plugin for VramUsagePlugin {
 
         app.insert_resource(usage.clone())
             .add_systems(Startup, spawn_vram_text)
+            .add_observer(copy_stats_to_clipboard)
             .add_systems(
                 Update,
-                (
-                    update_vram_text,
-                    offset_fps_overlay,
-                    copy_stats_to_clipboard,
-                    highlight_copy_button,
-                    expire_copied_toast,
-                ),
+                (update_vram_text, follow_the_overlay, offset_fps_overlay),
             );
 
         // The allocator lives in the render world, so the counters are shared across the
@@ -73,28 +68,8 @@ fn sample_vram(device: Res<RenderDevice>, usage: Res<VramUsage>) {
 }
 
 fn spawn_vram_text(mut commands: Commands) {
-    commands
-        .spawn((
-            CopyButton,
-            Button,
-            Node {
-                position_type: PositionType::Absolute,
-                top: Val::Px(6.0),
-                left: Val::Px(420.0),
-                padding: UiRect::axes(Val::Px(6.0), Val::Px(2.0)),
-                ..default()
-            },
-            BackgroundColor(Color::srgba(0.0, 0.0, 0.0, 0.5)),
-        ))
-        .with_child((
-            Text::new("copy"),
-            TextFont {
-                font_size: FontSize::Px(14.0),
-                ..default()
-            },
-        ));
-
     commands.spawn((
+        VramOverlay,
         VramText,
         Text::default(),
         TextFont {
@@ -110,56 +85,53 @@ fn spawn_vram_text(mut commands: Commands) {
     ));
 }
 
+/// What this plugin draws in the top left corner: the vram line. Marked rather than found by
+/// `VramText`, so that a second reading added beside it follows the same switch.
+#[derive(Component)]
+struct VramOverlay;
+
+/// Shows and hides the vram line with the frame rate overlay, which the F11 panel's Perf tab
+/// switches.
+///
+/// The three readings in that corner are one glance, so one box governs them: a vram number
+/// with no frame rate beside it is a number with nothing to read it against. `Visibility`
+/// rather than `display`, so that the photo markers' quiet state — which takes every overlay
+/// off the screen with `display` and gives it back — still wins while it is on, as its own
+/// comment says an overlay with a say of its own may have it.
+fn follow_the_overlay(
+    config: Res<FpsOverlayConfig>,
+    mut nodes: Query<&mut Visibility, With<VramOverlay>>,
+) {
+    let wanted = match config.enabled {
+        true => Visibility::Inherited,
+        false => Visibility::Hidden,
+    };
+
+    for mut visibility in &mut nodes {
+        visibility.set_if_neq(wanted);
+    }
+}
+
 /// Puts the overlay text on the clipboard, so the numbers can be pasted somewhere.
 ///
 /// On X11 whoever sets the clipboard has to keep serving it until another application
 /// claims it, which is what set_clipboard_text waits for - hence the thread, since it
 /// blocks.
-fn copy_stats_to_clipboard(
-    mut commands: Commands,
-    button: Query<&Interaction, (Changed<Interaction>, With<CopyButton>)>,
-    text: Single<&Text, With<VramText>>,
-    mut toast: Query<&mut CopiedToast>,
-) {
-    for interaction in &button {
-        if *interaction != Interaction::Pressed {
-            continue;
-        }
+/// Nothing is drawn from here. The press is confirmed on the button that was pressed, in
+/// `tab_panel`, rather than by a note appearing beside the line in the corner.
+fn copy_stats_to_clipboard(_: On<CopyStats>, text: Single<&Text, With<VramText>>) {
+    let stats = text.0.clone();
 
-        // One toast at a time: a second press while it is showing just restarts the clock.
-        if let Ok(mut toast) = toast.single_mut() {
-            toast.0.reset();
-        } else {
-            commands.spawn((
-                CopiedToast(Timer::from_seconds(3.0, TimerMode::Once)),
-                Text::new("Copied!"),
-                TextFont {
-                    font_size: FontSize::Px(14.0),
-                    ..default()
-                },
-                Node {
-                    position_type: PositionType::Absolute,
-                    top: Val::Px(8.0),
-                    // Just right of the button.
-                    left: Val::Px(476.0),
-                    ..default()
-                },
-            ));
-        }
-
-        let stats = text.0.clone();
-
-        std::thread::spawn(move || {
-            match arboard::Clipboard::new() {
-                Ok(mut clipboard) => {
-                    if let Err(error) = set_clipboard_text(&mut clipboard, stats) {
-                        error!("could not set the clipboard: {error}");
-                    }
+    std::thread::spawn(move || {
+        match arboard::Clipboard::new() {
+            Ok(mut clipboard) => {
+                if let Err(error) = set_clipboard_text(&mut clipboard, stats) {
+                    error!("could not set the clipboard: {error}");
                 }
-                Err(error) => error!("could not reach the clipboard: {error}"),
-            };
-        });
-    }
+            }
+            Err(error) => error!("could not reach the clipboard: {error}"),
+        };
+    });
 }
 
 /// Linux only, as arboard has it: block until another application has taken the
@@ -187,34 +159,6 @@ fn set_clipboard_text(
     text: String,
 ) -> Result<(), arboard::Error> {
     clipboard.set_text(text)
-}
-
-fn expire_copied_toast(
-    mut commands: Commands,
-    time: Res<Time>,
-    mut toasts: Query<(Entity, &mut CopiedToast)>,
-) {
-    for (entity, mut toast) in &mut toasts {
-        if toast.0.tick(time.delta()).is_finished() {
-            commands.entity(entity).despawn();
-        }
-    }
-}
-
-/// Gives the copy button a hover and a press state, so it reads as a button.
-fn highlight_copy_button(
-    mut button: Query<
-        (&Interaction, &mut BackgroundColor),
-        (Changed<Interaction>, With<CopyButton>),
-    >,
-) {
-    for (interaction, mut background) in &mut button {
-        background.0 = match interaction {
-            Interaction::None => Color::srgba(0.0, 0.0, 0.0, 0.5),
-            Interaction::Hovered => Color::srgba(0.35, 0.35, 0.35, 0.8),
-            Interaction::Pressed => Color::srgba(0.6, 0.6, 0.6, 0.9),
-        };
-    }
 }
 
 /// Moves the fps overlay down so the vram line can have the top left corner.
