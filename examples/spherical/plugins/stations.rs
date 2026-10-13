@@ -59,7 +59,6 @@ impl Plugin for StationsPlugin {
             .add_systems(
                 Update,
                 (
-                    toggle_stations,
                     // After the splines are through this frame's line, so the anchors are
                     // on the line as it is.
                     anchor_stations.after(refresh_track_splines),
@@ -129,16 +128,6 @@ pub fn anchor_for(position: DVec3, splines: &TrackSplines) -> Option<DVec3> {
 /// A station's label, by the station's index into the stops.
 #[derive(Component)]
 struct StationLabel(usize);
-
-fn toggle_stations(keys: Res<ButtonInput<KeyCode>>, mut stations: ResMut<RailStations>) {
-    if keys.just_pressed(KeyCode::F9) {
-        stations.shown = !stations.shown;
-        info!(
-            "stations: {}",
-            if stations.shown { "shown" } else { "hidden" }
-        );
-    }
-}
 
 /// A node per station, in the style of the trains' labels, hidden until placed.
 fn spawn_station_labels(mut commands: Commands, stations: Res<RailStations>) {

@@ -1,19 +1,25 @@
-//! The F5 panel: what the selected point is, and buttons for the edits the keys have no room
-//! for.
+//! The track's controls: what the selected point is, and buttons for the edits the keys have no
+//! room for.
 //!
 //! The debug plugin has nearly every letter, so beyond Delete, Escape and the Control chords
-//! the editor's operations are buttons. The panel sits in the bottom right corner, clear of
-//! the F2 table above it whose height varies, and shows while editing is on: F5 flips
-//! editor.editing and the panel follows it, so the two cannot disagree. Its rows are a
-//! readout of the anchor, the point clicked last; the three modes; the actions; and, when the
-//! startup sampling found the ground moved under points since the file was saved, a row that
-//! steps the camera through them. Saving is here too, from the button and from Ctrl+S, with a
-//! toast beside the panel saying how it went.
+//! the editor's operations are buttons. They were a panel of their own in the bottom right
+//! corner, shown while editing was on; they are the AT trains tab's Tracks page now, under the
+//! four switches over the network — the lines, the editing, the frames and the station names —
+//! since the track
+//! is one thing whether it is being looked at or worked on. There is nothing left for a panel's
+//! visibility to follow: the switch that turns editing on is on the page with the buttons, and
+//! `enable_buttons` hands them all to the widget as disabled while it is off.
 //!
-//! The buttons are Bevy's Button with its Interaction, the pattern of the copy button in
-//! vram_usage.rs: one component names the action, one system acts on a press, one colours
-//! hover and press, and one dims the buttons that cannot apply. What is shown is put into
-//! words by pure functions, which the tests check.
+//! The page's rows are a readout of the anchor, the point clicked last; the three modes; the
+//! actions; and, when the startup sampling found the ground moved under points since the file
+//! was saved, a row that steps the camera through them. Saving is here too, from the button and
+//! from Ctrl+S, with a toast in the bottom right corner — which the editor's own panel used to
+//! hold — saying how it went.
+//!
+//! The buttons are feathers ones, which carry their own hover, press, focus and disabled
+//! states: one component names the action, one observer does the work of a press, and
+//! `InteractionDisabled` says what cannot apply, where a painting system and a dimming system
+//! used to. What is shown is put into words by pure functions, which the tests check.
 
 use super::{MoveDrag, RailEditor, RailEditorSystems};
 use crate::plugins::auckland_rail::{
@@ -21,7 +27,13 @@ use crate::plugins::auckland_rail::{
 };
 use crate::plugins::provenance::ascii;
 use crate::plugins::shared::rail_network::{MAX_GRADE, PointMode};
-use bevy::ecs::relationship::RelatedSpawnerCommands;
+use crate::plugins::stations::RailStations;
+use crate::plugins::tab_panel::{SubTab, SubTabBody};
+use crate::plugins::track_frames::TrackFrames;
+use bevy::feathers::controls::{ButtonVariant, FeathersButton, FeathersCheckbox};
+use bevy::feathers::theme::ThemedText;
+use bevy::ui::{Checked, InteractionDisabled};
+use bevy::ui_widgets::{Activate, ValueChange};
 use bevy::{prelude::*, text::FontSize};
 use bevy_terrain::prelude::*;
 use big_space::prelude::{CellCoord, Grids};
@@ -37,16 +49,14 @@ pub(super) struct RailPanelPlugin;
 impl Plugin for RailPanelPlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<MovedCursor>()
-            .add_systems(Startup, spawn_panel)
+            .add_observer(on_pressed)
             .add_systems(
                 Update,
                 (
-                    toggle_editing,
-                    show_panel,
+                    fill_tracks_page,
                     save_on_ctrl_s,
-                    press_buttons,
-                    colour_buttons,
-                    dim_buttons,
+                    sync_boxes,
+                    enable_buttons,
                     expire_toasts,
                 )
                     .chain()
@@ -63,11 +73,6 @@ impl Plugin for RailPanelPlugin {
     }
 }
 
-/// The panel's width, in pixels. Fixed rather than fitted to its text, so its edge does not
-/// wander as the readout changes and the toast knows where to sit beside it. Wide enough for
-/// the moved-ground sentence and its two buttons on one line at the 12 px font.
-const PANEL_WIDTH: f32 = 520.0;
-
 /// The gap between the window's edge and the panel, and between the panel and the toast, in
 /// pixels; the F2 table keeps the same from its corner.
 const MARGIN: f32 = 6.0;
@@ -76,25 +81,6 @@ const MARGIN: f32 = 6.0;
 /// error, which says what to do about it.
 const TOAST_SECONDS: f32 = 3.0;
 const ERROR_TOAST_SECONDS: f32 = 6.0;
-
-/// The buttons' colours. The panel is black at half alpha, so a button has to be lighter than
-/// that to be seen as one; hover and press lighten it further, as the copy button does.
-const BUTTON_COLOUR: Color = Color::srgba(0.25, 0.25, 0.25, 0.8);
-const HOVER_COLOUR: Color = Color::srgba(0.4, 0.4, 0.4, 0.9);
-const PRESSED_COLOUR: Color = Color::srgba(0.6, 0.6, 0.6, 0.9);
-
-/// The mode button of the anchor's own mode, so the row reads as a state as well as three
-/// actions. A blue no line, disc or warning is coloured in.
-const CURRENT_COLOUR: Color = Color::srgba(0.2, 0.42, 0.65, 0.9);
-
-/// A button that cannot apply: all but the panel's own black, with its caption greyed, and
-/// neither hover nor press lights it.
-const DISABLED_COLOUR: Color = Color::srgba(0.12, 0.12, 0.12, 0.6);
-const DISABLED_TEXT: Color = Color::srgb(0.45, 0.45, 0.45);
-
-/// The panel itself, shown while editing is on.
-#[derive(Component)]
-struct EditorPanel;
 
 /// The text describing the anchor.
 #[derive(Component)]
@@ -111,8 +97,9 @@ struct MovedText;
 #[derive(Component, Clone, Copy)]
 struct EditorButton(Action);
 
-/// A button's text, dimmed with the button.
-#[derive(Component)]
+/// A button's text. Spawned as the feathers button's own caption, so the widget owns how it is
+/// laid out and coloured, dimming included.
+#[derive(Component, Default, Clone)]
 struct Caption;
 
 /// What a save said, gone again once the timer runs out.
@@ -245,8 +232,9 @@ fn save_network(
         Node {
             position_type: PositionType::Absolute,
             bottom: Val::Px(MARGIN),
-            // Just left of the panel, whether or not the panel is showing.
-            right: Val::Px(2.0 * MARGIN + PANEL_WIDTH),
+            // The bottom right corner, which the editor's panel used to hold and the F11
+            // panel does not: it stands in the bottom left.
+            right: Val::Px(MARGIN),
             // An error names the file by its path; this keeps it to a few lines.
             max_width: Val::Px(360.0),
             padding: UiRect::all(Val::Px(MARGIN)),
@@ -263,25 +251,6 @@ fn font() -> TextFont {
     }
 }
 
-fn spawn_button(row: &mut RelatedSpawnerCommands<ChildOf>, action: Action) {
-    row.spawn((
-        EditorButton(action),
-        Button,
-        Node {
-            padding: UiRect::axes(Val::Px(6.0), Val::Px(2.0)),
-            ..default()
-        },
-        BackgroundColor(BUTTON_COLOUR),
-        children![(
-            Caption,
-            Text::new(action.caption()),
-            font(),
-            TextColor(Color::WHITE)
-        )],
-    ));
-}
-
-/// A row of buttons, wrapping onto a second line when the panel is too narrow for them all.
 fn row() -> Node {
     Node {
         flex_direction: FlexDirection::Row,
@@ -293,86 +262,226 @@ fn row() -> Node {
     }
 }
 
-fn spawn_panel(mut commands: Commands) {
-    commands
-        .spawn((
-            EditorPanel,
-            Node {
-                position_type: PositionType::Absolute,
-                bottom: Val::Px(MARGIN),
-                right: Val::Px(MARGIN),
-                width: Val::Px(PANEL_WIDTH),
-                flex_direction: FlexDirection::Column,
-                row_gap: Val::Px(8.0),
-                padding: UiRect::all(Val::Px(MARGIN)),
-                ..default()
-            },
-            BackgroundColor(Color::srgba(0.0, 0.0, 0.0, 0.5)),
-            Visibility::Hidden,
-        ))
-        .with_children(|panel| {
-            panel.spawn((
-                Readout,
-                Text::new("no point selected"),
-                font(),
-                TextColor(Color::WHITE),
-            ));
-
-            panel.spawn(row()).with_children(|modes| {
-                for mode in [PointMode::Ground, PointMode::Fixed, PointMode::Between] {
-                    spawn_button(modes, Action::Mode(mode));
-                }
-            });
-
-            panel.spawn(row()).with_children(|actions| {
-                for action in [
-                    Action::DropToGround,
-                    Action::SpanSelection,
-                    Action::SelectSteepRun,
-                    Action::Undo,
-                    Action::Redo,
-                    Action::Save,
-                ] {
-                    spawn_button(actions, action);
-                }
-            });
-
-            // Laid out only while there is something to report, see update_readout.
-            let mut moved = row();
-            moved.display = Display::None;
-            panel.spawn((MovedRow, moved)).with_children(|moved| {
-                moved.spawn((
-                    MovedText,
-                    Text::new(moved_ground_text(0, None)),
-                    font(),
-                    TextColor(Color::WHITE),
-                ));
-                spawn_button(moved, Action::PreviousMoved);
-                spawn_button(moved, Action::NextMoved);
-            });
-        });
+/// Which switch a checkbox drives on the Tracks page. The resource is the truth for each, so a
+/// box and its key can never disagree: both write the field, and `sync_boxes` brings the box
+/// back to it.
+#[derive(Component, Clone, Copy, PartialEq, Eq)]
+enum Switch {
+    /// `AucklandRail::visible`: the lines over the city.
+    Lines,
+    /// `RailEditor::editing`: the discs, the handle and these buttons.
+    Editing,
+    /// `TrackFrames::shown`: an arrow every 25 m along the line.
+    Frames,
+    /// `RailStations::shown`: the station names over the lines.
+    Stations,
 }
 
-/// F5 turns editing on and off. The panel follows in show_panel, so the key is read once and
-/// the two cannot drift apart.
-fn toggle_editing(keys: Res<ButtonInput<KeyCode>>, mut editor: ResMut<RailEditor>) {
-    if keys.just_pressed(KeyCode::F5) {
-        editor.editing = !editor.editing;
-        info!(
-            "rail editor: editing {}",
-            if editor.editing { "on" } else { "off" }
+/// Fills the AT trains tab's Tracks page: the four switches over the network, then the
+/// editor's own controls under them.
+///
+/// The editor was a panel of its own in the bottom right corner, shown exactly while editing
+/// was on. It is a page now, and the switch that turns editing on is on the page with it, so
+/// there is nothing left for the panel's visibility to follow: the controls are laid out
+/// whether or not editing is on, and `enable_buttons` hands every one of them to the widget as
+/// disabled while it is off, as it does for a button whose edit has nothing to apply to.
+fn fill_tracks_page(
+    mut commands: Commands,
+    bodies: Query<(Entity, &SubTabBody), Added<SubTabBody>>,
+    editor: Res<RailEditor>,
+    rail: Res<AucklandRail>,
+    frames: Res<TrackFrames>,
+    stations: Res<RailStations>,
+) {
+    for (body, page) in bodies.iter().filter(|(_, page)| page.0 == SubTab::Tracks) {
+        spawn_box(
+            &mut commands,
+            body,
+            Switch::Lines,
+            "show the lines",
+            rail.visible,
         );
+        spawn_box(
+            &mut commands,
+            body,
+            Switch::Editing,
+            "edit the track",
+            editor.editing,
+        );
+        spawn_box(
+            &mut commands,
+            body,
+            Switch::Frames,
+            "show the frames",
+            frames.shown,
+        );
+        spawn_box(
+            &mut commands,
+            body,
+            Switch::Stations,
+            "show the station names",
+            stations.shown,
+        );
+        let _ = page;
+
+        commands.spawn((
+            Readout,
+            Text::new(readout_text(&editor, &rail.network)),
+            ThemedText,
+            ChildOf(body),
+        ));
+
+        let modes = commands.spawn((row(), ChildOf(body))).id();
+        for mode in [PointMode::Ground, PointMode::Fixed, PointMode::Between] {
+            spawn_button(&mut commands, modes, Action::Mode(mode));
+        }
+
+        let actions = commands.spawn((row(), ChildOf(body))).id();
+        for action in [
+            Action::DropToGround,
+            Action::SpanSelection,
+            Action::SelectSteepRun,
+            Action::Undo,
+            Action::Redo,
+            Action::Save,
+        ] {
+            spawn_button(&mut commands, actions, action);
+        }
+
+        // Laid out only while there is something to report, see update_readout.
+        let mut moved = row();
+        moved.display = Display::None;
+        let moved = commands.spawn((MovedRow, moved, ChildOf(body))).id();
+        commands.spawn((
+            MovedText,
+            Text::new(moved_ground_text(0, None)),
+            ThemedText,
+            ChildOf(moved),
+        ));
+        for action in [Action::PreviousMoved, Action::NextMoved] {
+            spawn_button(&mut commands, moved, action);
+        }
     }
 }
 
-/// The panel is visible exactly while editing is on.
-fn show_panel(editor: Res<RailEditor>, mut panel: Single<&mut Visibility, With<EditorPanel>>) {
-    let visibility = if editor.editing {
-        Visibility::Visible
-    } else {
-        Visibility::Hidden
-    };
-    panel.set_if_neq(visibility);
+/// A checkbox over one of the three switches.
+fn spawn_box(commands: &mut Commands, body: Entity, switch: Switch, caption: &str, on: bool) {
+    commands
+        .spawn_scene(bsn! {
+            @FeathersCheckbox {
+                @caption: bsn! { Text({caption.to_string()}) ThemedText },
+            }
+        })
+        .insert((switch, ChildOf(body)))
+        .insert_if(Checked, || on)
+        .observe(
+            move |change: On<ValueChange<bool>>,
+                  mut editor: ResMut<RailEditor>,
+                  mut rail: ResMut<AucklandRail>,
+                  mut frames: ResMut<TrackFrames>,
+                  mut stations: ResMut<RailStations>| {
+                match switch {
+                    Switch::Lines => rail.visible = change.value,
+                    Switch::Editing => editor.editing = change.value,
+                    Switch::Frames => {
+                        frames.shown = change.value;
+                        // Nothing was recomputed while hidden, as F6 has it.
+                        frames.stale = true;
+                    }
+                    Switch::Stations => stations.shown = change.value,
+                }
+            },
+        );
+}
+
+/// One of the editor's buttons, which triggers [`Pressed`] when the widget says it was
+/// activated, so the work itself stays in one observer however a press arrived.
+fn spawn_button(commands: &mut Commands, row: Entity, action: Action) {
+    commands
+        .spawn_scene(bsn! {
+            @FeathersButton {
+                @caption: bsn! { Text({action.caption().to_string()}) ThemedText Caption },
+            }
+        })
+        .insert((EditorButton(action), ChildOf(row)))
+        .observe(move |_: On<Activate>, mut commands: Commands| {
+            commands.trigger(Pressed(action));
+        });
+}
+
+/// Brings each box back to its switch, for a key pressed since it was drawn.
+fn sync_boxes(
+    mut commands: Commands,
+    editor: Res<RailEditor>,
+    rail: Res<AucklandRail>,
+    frames: Res<TrackFrames>,
+    stations: Res<RailStations>,
+    boxes: Query<(Entity, &Switch, Has<Checked>)>,
+) {
+    for (entity, switch, checked) in &boxes {
+        let on = match switch {
+            Switch::Lines => rail.visible,
+            Switch::Editing => editor.editing,
+            Switch::Frames => frames.shown,
+            Switch::Stations => stations.shown,
+        };
+
+        match (on, checked) {
+            (true, false) => {
+                commands.entity(entity).insert(Checked);
+            }
+            (false, true) => {
+                commands.entity(entity).remove::<Checked>();
+            }
+            _ => {}
+        }
+    }
+}
+
+/// Hands a button that cannot apply to the widget as disabled, and holds the anchor's own mode
+/// down.
+///
+/// `InteractionDisabled` is what feathers reads to grey a button and what `bevy_ui_widgets`
+/// reads to stop it activating, so one component does what the painting and the dimming used to
+/// do between them, and `ButtonVariant::Primary` does what the current mode's own colour did.
+/// Every frame rather than on a change, because a button goes from able to unable, and a mode
+/// from current to not, without the pointer moving.
+fn enable_buttons(
+    mut commands: Commands,
+    editor: Res<RailEditor>,
+    rail: Res<AucklandRail>,
+    mut buttons: Query<(
+        Entity,
+        &EditorButton,
+        Has<InteractionDisabled>,
+        &mut ButtonVariant,
+    )>,
+) {
+    let readiness = Readiness::of(&editor, &rail);
+    let current = anchor_mode(&editor, &rail.network);
+
+    for (entity, button, disabled, mut variant) in &mut buttons {
+        let action = button.0;
+        // Editing off is every edit unavailable: the mouse, the discs and the handle are inert
+        // then, and a button that acted would edit a network nothing was showing you.
+        let enabled = editor.editing && action.enabled(readiness);
+
+        match (enabled, disabled) {
+            (true, true) => {
+                commands.entity(entity).remove::<InteractionDisabled>();
+            }
+            (false, false) => {
+                commands.entity(entity).insert(InteractionDisabled);
+            }
+            _ => {}
+        }
+
+        let wanted = match action {
+            Action::Mode(mode) if Some(mode) == current => ButtonVariant::Primary,
+            _ => ButtonVariant::Normal,
+        };
+        variant.set_if_neq(wanted);
+    }
 }
 
 /// Ctrl+S, either Control key, whether or not the editor is on: the save is of the lines and
@@ -395,9 +504,17 @@ fn save_on_ctrl_s(
 /// a drag to end, as the keys do: mid-drag an undo would pop the drag's own snapshot, and a
 /// camera moved into another cell ends the drag where it is.
 #[allow(clippy::too_many_arguments)]
-fn press_buttons(
+/// A press of one of the editor's buttons, which [`on_pressed`] answers.
+#[derive(Event)]
+struct Pressed(Action);
+
+/// What each button does. One observer rather than a system over the buttons: the widgets say
+/// when they were activated, so what is left is the work, and the work wants a good many
+/// resources to be named once rather than per button.
+#[allow(clippy::too_many_arguments)]
+fn on_pressed(
+    press: On<Pressed>,
     mut commands: Commands,
-    buttons: Query<(&EditorButton, &Interaction), Changed<Interaction>>,
     mut editor: ResMut<RailEditor>,
     mut rail: ResMut<AucklandRail>,
     mut sampler: Option<ResMut<RailSampler>>,
@@ -407,142 +524,83 @@ fn press_buttons(
     grids: Grids,
     mut camera: Query<(Entity, &mut Transform, &mut CellCoord), With<OrbitalCameraController>>,
 ) {
-    for (button, interaction) in &buttons {
-        if *interaction != Interaction::Pressed {
-            continue;
-        }
-        let action = button.0;
-        if !action.enabled(Readiness::of(&editor, &rail)) {
-            continue;
-        }
+    let action = press.0;
+    if !action.enabled(Readiness::of(&editor, &rail)) {
+        return;
+    }
 
-        match action {
-            Action::Mode(mode) => {
-                if editor.set_mode(&mut rail.network, mode) {
-                    rail.dirty = true;
-                    info!(
-                        "rail editor: {} points made {}",
-                        editor.selection.len(),
-                        mode.name()
-                    );
-                }
-            }
-            Action::DropToGround => {
-                if editor.drop_to_ground(&mut rail.network) {
-                    rail.dirty = true;
-                    info!(
-                        "rail editor: {} points dropped to the ground",
-                        editor.selection.len()
-                    );
-                }
-            }
-            Action::SpanSelection => {
-                if editor.span_selection(&mut rail.network) {
-                    rail.dirty = true;
-                    info!("rail editor: spanned the selection");
-                }
-            }
-            Action::SelectSteepRun => {
-                let added = editor.select_steep_run(&rail.network, MAX_GRADE);
-                info!("rail editor: {added} points added along the steep ground");
-            }
-            Action::Undo | Action::Redo => {
-                if drag.in_progress() {
-                    continue;
-                }
-                let (done, what) = if action == Action::Undo {
-                    (
-                        editor.undo(&mut rail.network, sampler.as_deref_mut()),
-                        "undone",
-                    )
-                } else {
-                    (
-                        editor.redo(&mut rail.network, sampler.as_deref_mut()),
-                        "redone",
-                    )
-                };
-                if done {
-                    rail.dirty = true;
-                    info!("rail editor: {what}");
-                }
-            }
-            Action::Save => save_network(&mut commands, &rail, &mut toasts),
-            Action::PreviousMoved | Action::NextMoved => {
-                if drag.in_progress() {
-                    continue;
-                }
-                let target = step_moved(
-                    action == Action::NextMoved,
-                    &mut cursor.0,
-                    &rail.moved_ground,
-                    &rail.network,
-                    &mut editor,
+    match action {
+        Action::Mode(mode) => {
+            if editor.set_mode(&mut rail.network, mode) {
+                rail.dirty = true;
+                info!(
+                    "rail editor: {} points made {}",
+                    editor.selection.len(),
+                    mode.name()
                 );
-                match target {
-                    Some(target) => fly_to(target, &grids, &mut camera),
-                    None => warn!(
-                        "rail editor: moved point {} of {} has been moved or removed since the \
-                         startup sampling listed it",
-                        cursor.0.map_or(0, |at| at + 1),
-                        rail.moved_ground.len()
-                    ),
-                }
             }
         }
-    }
-}
-
-/// A button's background by what the pointer is doing to it, whether it can apply, and
-/// whether it is the mode the anchor has.
-fn button_colour(interaction: Interaction, enabled: bool, current: bool) -> Color {
-    match (enabled, interaction) {
-        (false, _) => DISABLED_COLOUR,
-        (true, Interaction::Pressed) => PRESSED_COLOUR,
-        (true, Interaction::Hovered) => HOVER_COLOUR,
-        (true, Interaction::None) if current => CURRENT_COLOUR,
-        (true, Interaction::None) => BUTTON_COLOUR,
-    }
-}
-
-/// Gives the buttons their hover and press states, and the anchor's mode its highlight. Every
-/// frame rather than on a change of Interaction, because a button goes from able to unable,
-/// and a mode from current to not, without the pointer moving; the write is skipped when the
-/// colour is already right.
-fn colour_buttons(
-    editor: Res<RailEditor>,
-    rail: Res<AucklandRail>,
-    mut buttons: Query<(&EditorButton, &Interaction, &mut BackgroundColor)>,
-) {
-    let readiness = Readiness::of(&editor, &rail);
-    let current = anchor_mode(&editor, &rail.network);
-
-    for (button, interaction, mut background) in &mut buttons {
-        let action = button.0;
-        let is_current = matches!(action, Action::Mode(mode) if Some(mode) == current);
-        let colour = button_colour(*interaction, action.enabled(readiness), is_current);
-        background.set_if_neq(BackgroundColor(colour));
-    }
-}
-
-/// Greys the caption of a button that cannot apply, and whitens it again when it can.
-fn dim_buttons(
-    editor: Res<RailEditor>,
-    rail: Res<AucklandRail>,
-    buttons: Query<&EditorButton>,
-    mut captions: Query<(&ChildOf, &mut TextColor), With<Caption>>,
-) {
-    let readiness = Readiness::of(&editor, &rail);
-
-    for (child_of, mut colour) in &mut captions {
-        let Ok(button) = buttons.get(child_of.parent()) else {
-            continue;
-        };
-        let text = if button.0.enabled(readiness) {
-            Color::WHITE
-        } else {
-            DISABLED_TEXT
-        };
-        colour.set_if_neq(TextColor(text));
+        Action::DropToGround => {
+            if editor.drop_to_ground(&mut rail.network) {
+                rail.dirty = true;
+                info!(
+                    "rail editor: {} points dropped to the ground",
+                    editor.selection.len()
+                );
+            }
+        }
+        Action::SpanSelection => {
+            if editor.span_selection(&mut rail.network) {
+                rail.dirty = true;
+                info!("rail editor: spanned the selection");
+            }
+        }
+        Action::SelectSteepRun => {
+            let added = editor.select_steep_run(&rail.network, MAX_GRADE);
+            info!("rail editor: {added} points added along the steep ground");
+        }
+        Action::Undo | Action::Redo => {
+            if drag.in_progress() {
+                return;
+            }
+            let (done, what) = if action == Action::Undo {
+                (
+                    editor.undo(&mut rail.network, sampler.as_deref_mut()),
+                    "undone",
+                )
+            } else {
+                (
+                    editor.redo(&mut rail.network, sampler.as_deref_mut()),
+                    "redone",
+                )
+            };
+            if done {
+                rail.dirty = true;
+                info!("rail editor: {what}");
+            }
+        }
+        Action::Save => save_network(&mut commands, &rail, &mut toasts),
+        Action::PreviousMoved | Action::NextMoved => {
+            if drag.in_progress() {
+                return;
+            }
+            let target = step_moved(
+                action == Action::NextMoved,
+                &mut cursor.0,
+                &rail.moved_ground,
+                &rail.network,
+                &mut editor,
+            );
+            match target {
+                Some(target) => fly_to(target, &grids, &mut camera),
+                None => warn!(
+                    "rail editor: moved point {} of {} has been moved or removed since the \
+                         startup sampling listed it",
+                    cursor.0.map_or(0, |at| at + 1),
+                    rail.moved_ground.len()
+                ),
+            }
+        }
     }
 }
 

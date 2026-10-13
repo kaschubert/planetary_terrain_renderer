@@ -66,7 +66,6 @@ impl Plugin for AucklandRailPlugin {
             .add_systems(
                 Update,
                 (
-                    toggle_rail_lines,
                     collect_samples.run_if(resource_exists::<SamplingTask>),
                     // Last, so that samples landing this frame are drawn this frame.
                     resolve_rail_heights.run_if(rail_dirty),
@@ -506,12 +505,6 @@ fn configure_rail_gizmos(mut store: ResMut<GizmoConfigStore>) {
         gap_scale: GAP_SCALE,
         line_scale: DASH_SCALE,
     };
-}
-
-fn toggle_rail_lines(input: Res<ButtonInput<KeyCode>>, mut rail: ResMut<AucklandRail>) {
-    if input.just_pressed(KeyCode::F4) {
-        rail.visible = !rail.visible;
-    }
 }
 
 /// Each line in runs: solid track in the line's colour, the spans dashed, and while the

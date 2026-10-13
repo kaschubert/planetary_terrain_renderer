@@ -381,11 +381,7 @@ impl Plugin for TrackFramesPlugin {
                 // After the positions have been recomputed, so the splines are through this
                 // frame's line; see refresh_track_frames for why there and not before. The
                 // frames come after the splines, being resampled from them.
-                (
-                    toggle_track_frames,
-                    refresh_track_splines,
-                    refresh_track_frames,
-                )
+                (refresh_track_splines, refresh_track_frames)
                     .chain()
                     .after(resolve_rail_heights),
             )
@@ -459,18 +455,6 @@ impl Default for TrackFrames {
 
 fn configure_frame_gizmos(mut store: ResMut<GizmoConfigStore>) {
     store.config_mut::<TrackFrameGizmos>().0.depth_bias = IN_FRONT_OF_TERRAIN;
-}
-
-fn toggle_track_frames(keys: Res<ButtonInput<KeyCode>>, mut frames: ResMut<TrackFrames>) {
-    if keys.just_pressed(KeyCode::F6) {
-        frames.shown = !frames.shown;
-        // Nothing was recomputed while hidden, so the first frame shown recomputes.
-        frames.stale = true;
-        info!(
-            "track frames: {}",
-            if frames.shown { "shown" } else { "hidden" }
-        );
-    }
 }
 
 /// Rebuilds the splines when the network changed, on the first frame and after every edit.

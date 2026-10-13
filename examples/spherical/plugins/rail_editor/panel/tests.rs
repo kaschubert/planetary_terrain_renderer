@@ -365,26 +365,3 @@ fn a_button_is_disabled_when_it_cannot_apply() {
     }
     assert!(Action::Save.enabled(hidden));
 }
-
-#[test]
-fn a_disabled_button_takes_no_colour_from_the_pointer() {
-    assert_eq!(
-        button_colour(Interaction::Hovered, false, false),
-        DISABLED_COLOUR
-    );
-    assert_eq!(
-        button_colour(Interaction::Pressed, false, false),
-        DISABLED_COLOUR
-    );
-    assert_eq!(button_colour(Interaction::None, true, false), BUTTON_COLOUR);
-    assert_eq!(button_colour(Interaction::None, true, true), CURRENT_COLOUR);
-    // Hover and press show over the current mode too, so the button still answers.
-    assert_eq!(
-        button_colour(Interaction::Hovered, true, true),
-        HOVER_COLOUR
-    );
-    assert_eq!(
-        button_colour(Interaction::Pressed, true, true),
-        PRESSED_COLOUR
-    );
-}
