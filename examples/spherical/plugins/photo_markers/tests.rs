@@ -954,7 +954,7 @@ fn a_card_in_flight_never_laps_the_one_it_is_moving_past() {
 }
 
 #[test]
-fn the_right_column_stops_above_the_panel_and_only_when_it_is_really_there() {
+fn either_column_stops_above_the_panel_and_only_when_it_is_really_there() {
     let widest = CARD.x;
     let full = VIEWPORT.y - EDGE_MARGIN;
 
@@ -975,10 +975,25 @@ fn the_right_column_stops_above_the_panel_and_only_when_it_is_really_there() {
         "and the left one is none of its business"
     );
 
-    // One that does not reach the column leaves it alone, so a narrow panel costs nothing.
+    // And one in the bottom left, which is where the F11 panel stands: the left column is the
+    // one that has to give way. A card left under the panel takes the press that would select
+    // it, which is how the panel's own buttons came to pick photographs through it.
+    let panel = Rect::from_corners(Vec2::new(12.0, 500.0), Vec2::new(372.0, 784.0));
+    let [left, right] = super::card::columns(VIEWPORT, widest, Some(panel));
+    assert_eq!(
+        left.bottom,
+        500.0 - CARD_GAP,
+        "the left column runs under the panel"
+    );
+    assert_eq!(
+        right.bottom, full,
+        "and the right one is none of its business"
+    );
+
+    // One that reaches neither column leaves both alone, so a panel between them costs nothing.
     let clear = Rect::from_corners(Vec2::new(200.0, 500.0), Vec2::new(600.0, 784.0));
-    let [_, right] = super::card::columns(VIEWPORT, widest, Some(clear));
-    assert_eq!(right.bottom, full);
+    let [left, right] = super::card::columns(VIEWPORT, widest, Some(clear));
+    assert_eq!((left.bottom, right.bottom), (full, full));
 }
 
 #[test]

@@ -1,31 +1,46 @@
-//! The F10 panel: which marker is selected, what colour it is, and how its card is drawn.
+//! The marker controls: which marker is selected, what colour it is, and how its card is drawn.
 //!
-//! Bottom right, in the F5 panel's style, and F10 stands the rail editor down as F5 stands this
-//! down, so the corner, Delete and Escape have one owner at a time. Only the editing state does
-//! that: F10 cycles through the photographs on their own as well, and that one gives the corner
-//! back, since the panel in it is the very thing in the way of what was opened to be looked at. The buttons are Bevy's
-//! Button with its Interaction, the pattern of the editor's panel and the overlay's copy button:
-//! one component names the action, one system acts on a press, one colours hover and press, and
-//! one dims what cannot apply.
+//! These used to be a panel of their own in the bottom right corner. They are now the F11
+//! panel's Marker tab: this plugin no longer spawns a panel, it fills the body that
+//! `tab_panel` marks [`MarkerTabBody`] and leaves for it, the way `camera_pose` fills the row
+//! the F1 list leaves empty. The frame, the corner, the background and the showing and hiding
+//! are the tab panel's; what is in the body is still this plugin's. F10 keeps its three states
+//! and brings the tab forward as the editing one comes on.
+//!
+//! F10 still stands the rail editor down as F5 stands these controls down, because Delete and
+//! Escape have one owner at a time, even though the two no longer share a corner.
+//!
+//! The buttons, the size sliders and the readouts are feathers widgets, which carry their own
+//! hover, press, focus and disabled states, so there is nothing here that paints a button.
+//! What cannot apply is given `InteractionDisabled` and the widget does the rest.
 //!
 //! The colour is hue, saturation and value on three sliders, the headless slider of the sheet
 //! grid's height control with a gradient under each track so a drag's effect can be seen before
-//! it is made. The marker holds those three numbers rather than a colour, because a very light
-//! grey, which is the default, has no hue to read back: deriving the sliders from a colour would
-//! send the hue to zero the moment the saturation reached it, and the hue slider would seem dead.
+//! it is made. Those three stay hand-drawn: feathers' own colour slider draws the same gradient
+//! but only for RGB and HSL channels, and the marker holds hue, saturation and value. It holds
+//! those three numbers rather than a colour because a very light grey, which is the default, has
+//! no hue to read back: deriving the sliders from a colour would send the hue to zero the moment
+//! the saturation reached it, and the hue slider would seem dead. Going through HSL to borrow the
+//! widget would put that loss back in by another door.
 //! The presets beside them are shortcuts, not the only colours: the sliders reach all of them.
 
 use bevy::ecs::relationship::RelatedSpawnerCommands;
-use bevy::ui::{Display, UiSystems};
+use bevy::feathers::controls::{FeathersButton, FeathersSlider};
+use bevy::feathers::display::label_dim;
+use bevy::feathers::theme::ThemedText;
+use bevy::ui::{Display, InteractionDisabled, UiSystems};
 use bevy::ui_widgets::{
-    Slider, SliderRange, SliderThumb, SliderValue, TrackClick, ValueChange, observe,
+    Activate, Slider, SliderPrecision, SliderRange, SliderStep, SliderThumb, SliderValue,
+    TrackClick, ValueChange, observe,
 };
 use bevy::{prelude::*, text::FontSize};
 
+use crate::plugins::tab_panel::{MarkerTabBody, ShowTab, Tab, TabInFront, two_columns};
+
 use super::card::MarkerCard;
-use super::card::{CARD_PIXELS, CORNER_RADIUS, MAX_CARD, MAX_RADIUS, MIN_CARD, MIN_RADIUS};
-use super::scatter::{self, MAX_COUNT, MIN_COUNT, SCATTER_COUNT, Scatter};
-use super::tether::{MAX_WIDTH, MIN_WIDTH, SELECTED_WIDTH};
+use super::card::{MAX_CARD, MAX_RADIUS, MIN_CARD, MIN_RADIUS};
+use super::scatter::{self, MAX_COUNT, MIN_COUNT, Scatter};
+use super::tether::{MAX_WIDTH, MIN_WIDTH};
 use super::{DEFAULT_COLOUR, MarkerView, PhotoMarkerSystems, PhotoMarkers, Showing, file, photo};
 use crate::plugins::provenance::ascii;
 use crate::plugins::rail_editor::RailEditor;
@@ -35,22 +50,21 @@ pub(super) struct PhotoPanelPlugin;
 
 impl Plugin for PhotoPanelPlugin {
     fn build(&self, app: &mut App) {
-        app.add_systems(Startup, spawn_panel).add_systems(
-            Update,
-            (
-                toggle_markers,
-                show_panel,
-                press_buttons,
-                press_swatches,
-                colour_buttons,
-                dim_buttons,
-                apply_colour,
-                sync_sliders,
-                style_sliders,
-                style_size_sliders,
-            )
-                .chain(),
-        );
+        app.add_observer(on_pressed)
+            .add_observer(show_on_tab)
+            .add_systems(
+                Update,
+                (
+                    open_marker_tab,
+                    fill_marker_tab,
+                    press_swatches,
+                    enable_buttons,
+                    apply_colour,
+                    sync_sliders,
+                    style_sliders,
+                )
+                    .chain(),
+            );
         app.add_systems(
             PostUpdate,
             // After the mouse has had its say on the selection, so the readout is of the marker
@@ -69,22 +83,10 @@ impl Plugin for PhotoPanelPlugin {
     }
 }
 
-/// The panel's width, in pixels. Fixed rather than fitted, so its edge does not wander as the
-/// readout changes. Wide enough for the readout's sentence at the 12 px font.
-const PANEL_WIDTH: f32 = 360.0;
-
-/// The gap between the window's edge and the panel, as the F5 panel and the F2 table keep.
+/// The gap between the controls in a row, as the F5 panel and the F2 table keep.
 const MARGIN: f32 = 6.0;
 
-/// The buttons' colours, the editor panel's: the panel is black at half alpha, so a button has
-/// to be lighter than that to read as one, and hover and press lighten it further.
-pub(crate) const BUTTON_COLOUR: Color = Color::srgba(0.25, 0.25, 0.25, 0.8);
-const HOVER_COLOUR: Color = Color::srgba(0.4, 0.4, 0.4, 0.9);
-const PRESSED_COLOUR: Color = Color::srgba(0.6, 0.6, 0.6, 0.9);
-const DISABLED_COLOUR: Color = Color::srgba(0.12, 0.12, 0.12, 0.6);
-const DISABLED_TEXT: Color = Color::srgb(0.45, 0.45, 0.45);
-
-/// The slider track's width and the thumb's size, in pixels, as the sheet grid's.
+/// The colour sliders' track width and thumb size, in pixels, as the sheet grid's.
 const SLIDER_WIDTH: f32 = 150.0;
 const THUMB_SIZE: f32 = 12.0;
 
@@ -103,10 +105,6 @@ const PRESETS: [(&str, Hsva); 8] = [
     ("blue", Hsva::hsv(205.0, 0.72, 0.85)),
     ("magenta", Hsva::hsv(320.0, 0.6, 0.85)),
 ];
-
-/// The panel itself, shown while marker mode is on.
-#[derive(Component)]
-pub(super) struct MarkerPanel;
 
 /// The text describing the selection.
 #[derive(Component)]
@@ -215,8 +213,9 @@ struct Preset(Hsva);
 #[derive(Component, Clone, Copy)]
 struct MarkerButton(Action);
 
-/// A button's text, dimmed with the button.
-#[derive(Component)]
+/// A button's text, which a two-state button rewrites. Spawned as the feathers button's own
+/// caption, so the widget still owns how it is laid out and coloured.
+#[derive(Component, Default, Clone)]
 struct Caption;
 
 /// The line that says which folder a scatter would take its photographs from.
@@ -225,6 +224,10 @@ struct ScatterReadout;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) enum Action {
+    /// Steps through what is drawn: nothing, the photographs on their own, the photographs
+    /// with these controls. The key that cycled it has gone to the tabs, so the cycle is a
+    /// button, captioned with what pressing it would show rather than with what is shown.
+    Showing,
     /// Draws every tether or only the selected marker's: a two-state button, whose caption
     /// says what pressing it would do rather than what the state is, as a switch on a wall
     /// does not.
@@ -265,6 +268,7 @@ impl Readiness {
 impl Action {
     pub(super) fn caption(self, markers: &PhotoMarkers) -> &'static str {
         match self {
+            Self::Showing => markers.showing.next().name(),
             Self::Tethers if markers.all_tethers => "one tether",
             Self::Tethers => "all tethers",
             Self::ClearPhoto => "clear photo",
@@ -279,6 +283,7 @@ impl Action {
     /// it; saving wants something unsaved and a file it may write over.
     fn enabled(self, readiness: Readiness) -> bool {
         match self {
+            Self::Showing => true,
             Self::Tethers => true,
             Self::ClearPhoto => readiness.has_photo,
             Self::Remove => readiness.selected,
@@ -306,25 +311,6 @@ fn row() -> Node {
         row_gap: Val::Px(4.0),
         ..default()
     }
-}
-
-fn spawn_button(row: &mut RelatedSpawnerCommands<ChildOf>, action: Action) {
-    row.spawn((
-        MarkerButton(action),
-        Button,
-        Node {
-            padding: UiRect::axes(Val::Px(6.0), Val::Px(2.0)),
-            ..default()
-        },
-        BackgroundColor(BUTTON_COLOUR),
-        children![(
-            Caption,
-            // Settled by dim_buttons on the first frame, which is what a two-state caption needs.
-            Text::new(String::new()),
-            font(),
-            TextColor(Color::WHITE)
-        )],
-    ));
 }
 
 /// One channel's slider: the headless widget keeps the value and handles the pointer, while the
@@ -463,14 +449,6 @@ impl Size {
         }
     }
 
-    /// How far along its track the value stands, 0 to 1, which is where its thumb goes.
-    fn fraction(self, markers: &PhotoMarkers) -> f32 {
-        let range = self.range();
-        let (start, end) = (range.start(), range.end());
-
-        ((self.of(markers) - start) / (end - start)).clamp(0.0, 1.0)
-    }
-
     fn reading(self, markers: &PhotoMarkers) -> String {
         match self {
             Self::Card => format!("{:.0} px", markers.card_pixels),
@@ -482,225 +460,314 @@ impl Size {
     }
 }
 
-/// A size slider's thumb, and the number beside it.
+/// Which size a feathers slider sets, and the number beside it.
 #[derive(Component)]
-struct SizeThumb(Size);
+struct SizeSlider(Size);
 
 #[derive(Component)]
 struct SizeReading(Size);
 
 /// One of the two size sliders. Plain, with no gradient: there is nothing to preview, and the
 /// number beside it says where it stands.
-fn spawn_size_slider(panel: &mut RelatedSpawnerCommands<ChildOf>, size: Size, value: f32) {
-    panel.spawn(row()).with_children(|line| {
-        line.spawn((
-            Text::new(size.name()),
-            font(),
-            TextColor(Color::WHITE),
-            Node {
-                min_width: Val::Px(66.0),
-                ..default()
-            },
-        ));
-
-        line.spawn((
-            Slider {
-                track_click: TrackClick::Snap,
-                ..default()
-            },
-            SliderValue(value),
-            size.range(),
-            Node {
-                width: Val::Px(SLIDER_WIDTH),
-                height: Val::Px(THUMB_SIZE),
-                justify_content: JustifyContent::Center,
-                flex_direction: FlexDirection::Column,
-                ..default()
-            },
-            observe(
-                move |change: On<ValueChange<f32>>,
-                      mut markers: ResMut<PhotoMarkers>,
-                      mut commands: Commands| {
-                    size.set(&mut markers, change.value);
-                    commands
-                        .entity(change.source)
-                        .insert(SliderValue(change.value));
-                },
-            ),
-            children![
-                (
-                    Node {
-                        height: Val::Px(6.0),
-                        ..default()
-                    },
-                    BackgroundColor(Color::srgb(0.35, 0.35, 0.35)),
-                ),
-                (
-                    Node {
-                        position_type: PositionType::Absolute,
-                        left: Val::Px(0.0),
-                        right: Val::Px(THUMB_SIZE),
-                        top: Val::Px(0.0),
-                        bottom: Val::Px(0.0),
-                        ..default()
-                    },
-                    children![(
-                        SizeThumb(size),
-                        SliderThumb,
-                        Node {
-                            position_type: PositionType::Absolute,
-                            width: Val::Px(THUMB_SIZE),
-                            height: Val::Px(THUMB_SIZE),
-                            left: Val::Percent(0.0),
-                            ..default()
-                        },
-                        BackgroundColor(Color::srgb(0.85, 0.85, 0.85)),
-                    )],
-                ),
-            ],
-        ));
-
-        line.spawn((
-            SizeReading(size),
-            Text::new(String::new()),
-            font(),
-            TextColor(Color::WHITE),
-            Node {
-                min_width: Val::Px(52.0),
-                ..default()
-            },
-        ));
-    });
-}
-
-fn spawn_panel(mut commands: Commands) {
-    let colour = DEFAULT_COLOUR;
-    let (card, corner) = (CARD_PIXELS, CORNER_RADIUS);
-
-    commands
-        .spawn((
-            MarkerPanel,
-            Node {
-                position_type: PositionType::Absolute,
-                bottom: Val::Px(MARGIN),
-                right: Val::Px(MARGIN),
-                width: Val::Px(PANEL_WIDTH),
-                flex_direction: FlexDirection::Column,
-                row_gap: Val::Px(8.0),
-                padding: UiRect::all(Val::Px(MARGIN)),
-                ..default()
-            },
-            BackgroundColor(Color::srgba(0.0, 0.0, 0.0, 0.5)),
-            Visibility::Hidden,
-        ))
-        .with_children(|panel| {
-            panel.spawn((
-                Readout,
-                Text::new(readout_text(None, 0)),
-                font(),
-                TextColor(Color::WHITE),
-            ));
-
-            // How the selected marker stands on screen right now, which is what the size is
-            // being judged against and what the sample button writes down.
-            panel.spawn((
-                SizeReadout,
-                Text::new(String::new()),
-                font(),
-                TextColor(Color::srgb(0.7, 0.78, 0.82)),
-            ));
-
-            spawn_size_slider(panel, Size::Card, card);
-            spawn_size_slider(panel, Size::Corner, corner);
-            spawn_size_slider(panel, Size::Selected, SELECTED_WIDTH);
-
-            panel
-                .spawn(row())
-                .with_children(|actions| spawn_button(actions, Action::Tethers));
-
-            panel.spawn(row()).with_children(|line| {
-                line.spawn((
-                    ColourSwatch,
-                    Node {
-                        width: Val::Px(SWATCH_SIZE),
-                        height: Val::Px(SWATCH_SIZE),
-                        ..default()
-                    },
-                    BackgroundColor(colour.into()),
-                ));
-                line.spawn((
-                    ColourHex,
-                    Text::new(hex_of(colour)),
-                    font(),
-                    TextColor(Color::WHITE),
-                ));
-            });
-
-            for channel in [Channel::Hue, Channel::Saturation, Channel::Value] {
-                spawn_slider(panel, channel, colour);
-            }
-
-            panel.spawn(row()).with_children(|swatches| {
-                for (_, preset) in PRESETS {
-                    swatches.spawn((
-                        Preset(preset),
-                        Button,
-                        Node {
-                            width: Val::Px(SWATCH_SIZE),
-                            height: Val::Px(SWATCH_SIZE),
-                            ..default()
-                        },
-                        BackgroundColor(preset.into()),
-                    ));
-                }
-            });
-
-            spawn_size_slider(panel, Size::Count, SCATTER_COUNT);
-
-            panel.spawn((
-                ScatterReadout,
-                Text::new(String::new()),
-                font(),
-                TextColor(Color::srgb(0.7, 0.78, 0.82)),
-            ));
-
-            panel.spawn(row()).with_children(|actions| {
-                for action in [Action::Folder, Action::Scatter] {
-                    spawn_button(actions, action);
-                }
-            });
-
-            panel.spawn(row()).with_children(|actions| {
-                for action in [Action::ClearPhoto, Action::Remove, Action::Save] {
-                    spawn_button(actions, action);
-                }
-            });
-        });
-}
-
-/// F10 cycles: open for work, stand back and look at the photographs, put them away. See
-/// Showing for why the middle one is worth a state of its own.
+/// Draws the markers as the Marker tab comes forward.
 ///
-/// The rail editor is stood down as the editing state comes on, because both panels want the
-/// bottom right corner and both want Delete and Escape. The panel's own visibility follows in
-/// show_panel, so the key is read once and the two cannot drift apart.
-fn toggle_markers(
-    keys: Res<ButtonInput<KeyCode>>,
+/// A tab of marker tools with nothing drawn is a page about nothing, and the cycle button at
+/// the top of it says what is shown and puts it away again. Only on the way in, and only from
+/// nothing: a tab clicked while the photographs are being looked at on their own leaves them
+/// that way.
+fn show_on_tab(
+    tab: On<TabInFront>,
     mut markers: ResMut<PhotoMarkers>,
     editor: Option<ResMut<RailEditor>>,
 ) {
-    if !keys.just_pressed(KeyCode::F10) {
+    if tab.0 != Tab::Marker || markers.showing != Showing::Nothing {
         return;
     }
 
-    markers.showing = markers.showing.next();
-
-    // Only the state that wants the corner stands the editor down. Coming back the other way,
-    // to the photographs alone, gives it back without the editor having to ask.
-    if let (true, Some(mut editor)) = (markers.showing.editing(), editor) {
+    markers.showing = Showing::Editing;
+    if let Some(mut editor) = editor {
         editor.editing = false;
     }
     info!("photo markers: {}", markers.showing.name());
+}
+
+/// Fills the panel's Marker tab the moment its body appears.
+///
+/// Keyed off the body rather than ordered against the tab panel's startup system, so that
+/// neither plugin has to know when the other runs — the arrangement the camera buttons and the
+/// F1 list already have. The body is spawned once and filled once; what changes afterwards is
+/// written by the systems below rather than respawned.
+fn fill_marker_tab(
+    mut commands: Commands,
+    bodies: Query<Entity, Added<MarkerTabBody>>,
+    markers: Res<PhotoMarkers>,
+) {
+    for body in &bodies {
+        // What a marker is drawn like on the left, what colour it is drawn in and what is
+        // done to it on the right; see two_columns for why a long tab is read in two.
+        let [left, right] = two_columns(&mut commands, body);
+
+        spawn_actions(&mut commands, left, &markers, &[Action::Showing]);
+
+        // The selection, and how the selected marker stands on screen: what the sizes below
+        // are judged against.
+        commands.spawn((
+            Readout,
+            Text::new(readout_text(None, 0)),
+            ThemedText,
+            ChildOf(left),
+        ));
+        commands
+            .spawn_scene(label_dim(""))
+            .insert((SizeReadout, ChildOf(left)));
+
+        for size in [Size::Card, Size::Corner, Size::Selected] {
+            spawn_size_row(&mut commands, left, size, &markers);
+        }
+
+        spawn_actions(&mut commands, left, &markers, &[Action::Tethers]);
+
+        // The colour the sliders hold, as a square and as hex.
+        let line = commands.spawn((row(), ChildOf(right))).id();
+        commands.spawn((
+            ColourSwatch,
+            Node {
+                width: Val::Px(SWATCH_SIZE),
+                height: Val::Px(SWATCH_SIZE),
+                ..default()
+            },
+            BackgroundColor(markers.colour.into()),
+            ChildOf(line),
+        ));
+        commands.spawn((
+            ColourHex,
+            Text::new(hex_of(markers.colour)),
+            ThemedText,
+            ChildOf(line),
+        ));
+
+        commands.entity(right).with_children(|right| {
+            for channel in [Channel::Hue, Channel::Saturation, Channel::Value] {
+                spawn_slider(right, channel, markers.colour);
+            }
+        });
+
+        // The presets, as swatches rather than captions: a colour names itself.
+        let swatches = commands.spawn((row(), ChildOf(right))).id();
+        for (_, preset) in PRESETS {
+            commands.spawn((
+                Preset(preset),
+                Button,
+                Node {
+                    width: Val::Px(SWATCH_SIZE),
+                    height: Val::Px(SWATCH_SIZE),
+                    ..default()
+                },
+                BackgroundColor(preset.into()),
+                ChildOf(swatches),
+            ));
+        }
+
+        // The two testing affordances, and how many a scatter makes.
+        spawn_size_row(&mut commands, right, Size::Count, &markers);
+        commands
+            .spawn_scene(label_dim(""))
+            .insert((ScatterReadout, ChildOf(right)));
+        spawn_actions(
+            &mut commands,
+            right,
+            &markers,
+            &[Action::Folder, Action::Scatter],
+        );
+
+        spawn_actions(
+            &mut commands,
+            right,
+            &markers,
+            &[Action::ClearPhoto, Action::Remove, Action::Save],
+        );
+    }
+}
+
+/// One size: its name, the reading of where it stands, and a feathers slider under them.
+///
+/// The slider draws its own number, and the reading beside the name is still here because it
+/// says what the number means — pixels, whole markers, or "square" where a radius has reached
+/// zero — which a bare value cannot.
+fn spawn_size_row(commands: &mut Commands, body: Entity, size: Size, markers: &PhotoMarkers) {
+    let line = commands.spawn((row(), ChildOf(body))).id();
+    commands.spawn_scene(label_dim(size.name())).insert((
+        Node {
+            min_width: Val::Px(66.0),
+            ..default()
+        },
+        ChildOf(line),
+    ));
+    commands.spawn((
+        SizeReading(size),
+        Text::new(size.reading(markers)),
+        ThemedText,
+        ChildOf(line),
+    ));
+
+    let range = size.range();
+    let value = size.of(markers);
+
+    commands
+        .spawn_scene(bsn! {
+            @FeathersSlider {
+                @min: {range.start()},
+                @max: {range.end()},
+                @value: {value},
+            }
+        })
+        .insert((SizeSlider(size), ChildOf(body)))
+        // Whole markers for the count, as the old track's snap gave, and two decimals for the
+        // width, which is the only one of the four read in fractions of a pixel.
+        .insert_if(SliderStep(1.0), || size == Size::Count)
+        .insert(SliderPrecision(match size {
+            Size::Selected => 1,
+            _ => 0,
+        }))
+        .observe(
+            move |change: On<ValueChange<f32>>,
+                  mut markers: ResMut<PhotoMarkers>,
+                  mut commands: Commands| {
+                size.set(&mut markers, change.value);
+                commands
+                    .entity(change.source)
+                    .insert(SliderValue(change.value));
+            },
+        );
+}
+
+/// A row of feathers buttons, one per action.
+///
+/// Each carries the action it names and triggers [`Pressed`] when the widget says it was
+/// activated, so the work itself stays in one observer however a press arrived — a click, or
+/// Enter on a focused button, which the hand-drawn ones never answered.
+fn spawn_actions(
+    commands: &mut Commands,
+    body: Entity,
+    markers: &PhotoMarkers,
+    actions: &[Action],
+) {
+    let line = commands.spawn((row(), ChildOf(body))).id();
+
+    for &action in actions {
+        commands
+            .spawn_scene(bsn! {
+                @FeathersButton {
+                    @caption: bsn! { Text({action.caption(markers).to_string()}) ThemedText Caption },
+                }
+            })
+            .insert((MarkerButton(action), ChildOf(line)))
+            .observe(move |_: On<Activate>, mut commands: Commands| {
+                commands.trigger(Pressed(action));
+            });
+    }
+}
+
+/// A press of one of the action buttons, which [`on_pressed`] answers.
+#[derive(Event)]
+struct Pressed(Action);
+
+/// What each button does. One observer rather than a system over the buttons: the widgets say
+/// when they were activated, so what is left is the work, and the work wants a good many
+/// resources to be named once rather than per button.
+///
+/// The readiness is checked again here even though a button that cannot apply is given
+/// `InteractionDisabled`, which stops the widget activating at all: the two are written in
+/// different places and the cheap check keeps them from disagreeing.
+#[allow(clippy::too_many_arguments)]
+fn on_pressed(
+    press: On<Pressed>,
+    mut commands: Commands,
+    mut markers: ResMut<PhotoMarkers>,
+    scatter: Res<Scatter>,
+    grids: big_space::prelude::Grids,
+    camera: Query<super::MarkerCamera, With<bevy_terrain::prelude::OrbitalCameraController>>,
+    mut cards: Query<&mut ImageNode>,
+    editor: Option<ResMut<RailEditor>>,
+) {
+    let readiness = Readiness::of(&markers, &scatter);
+    if !press.0.enabled(readiness) {
+        return;
+    }
+
+    match press.0 {
+        Action::Showing => {
+            markers.showing = markers.showing.next();
+            // Only the state that wants the keys stands the editor down. Coming back the other
+            // way, to the photographs alone, gives them back without the editor having to ask.
+            if let (true, Some(mut editor)) = (markers.showing.editing(), editor) {
+                editor.editing = false;
+            }
+            info!("photo markers: {}", markers.showing.name());
+        }
+        Action::ClearPhoto => {
+            if let Some(marker) = markers.selected_mut() {
+                let card = marker.card;
+                photo::clear_photo(&mut marker.photo, &mut marker.missing, &mut marker.aspect);
+                super::card::clear_card(card, &mut cards);
+                markers.dirty = true;
+            }
+        }
+        Action::Remove => {
+            if let Some(entity) = markers.remove_selected() {
+                commands.entity(entity).despawn();
+            }
+        }
+        Action::Tethers => {
+            markers.all_tethers = !markers.all_tethers;
+            info!(
+                "photo markers: {}",
+                match markers.all_tethers {
+                    true => "every tether drawn",
+                    false => "only the selected marker's tether",
+                }
+            );
+        }
+        Action::Save => file::save_markers(&mut markers),
+        Action::Folder => scatter::choose_folder(&mut commands),
+        Action::Scatter => {
+            // Around whatever the camera is over at the moment of the press, so a scatter
+            // fills the view you are looking at rather than one you were.
+            let Some(position) = camera.single().ok().and_then(|camera| {
+                let grid = grids.parent_grid(camera.entity)?;
+                Some(grid.grid_position_double(camera.cell, camera.transform))
+            }) else {
+                return;
+            };
+
+            let (around, altitude) = scatter::over_the_camera(position);
+            scatter::scatter_markers(&mut markers, &scatter, around, altitude, &mut commands);
+        }
+    }
+}
+
+/// Brings the Marker tab forward as the markers reach their editing state, and puts the panel
+/// away again as they leave.
+///
+/// The old panel was visible exactly while that state was on, which it could be because the
+/// panel was this plugin's. The F11 panel is shared, so the state change asks for the tab
+/// rather than holding the panel open: F11 and the other two tabs go on working while markers
+/// are being edited, and putting the tab away takes the panel with it only while the Marker tab
+/// is the one in front.
+fn open_marker_tab(
+    markers: Res<PhotoMarkers>,
+    mut commands: Commands,
+    mut was_editing: Local<bool>,
+) {
+    let editing = markers.showing.editing();
+    if editing != *was_editing {
+        commands.trigger(match editing {
+            true => ShowTab::Up(Tab::Marker),
+            false => ShowTab::Down(Tab::Marker),
+        });
+    }
+
+    *was_editing = editing;
 }
 
 /// Everything on screen that belongs to somebody else: a UI node with no parent, which is not
@@ -776,77 +843,6 @@ fn quieten_everything_else(
     *quiet = wanted;
 }
 
-/// The panel is visible exactly while F10 is on its editing state. The cards follow
-/// `Showing::cards` instead, so the middle state leaves the photographs and takes the panel.
-fn show_panel(markers: Res<PhotoMarkers>, mut panel: Single<&mut Visibility, With<MarkerPanel>>) {
-    let visibility = if markers.showing.editing() {
-        Visibility::Visible
-    } else {
-        Visibility::Hidden
-    };
-    panel.set_if_neq(visibility);
-}
-
-#[allow(clippy::too_many_arguments)]
-fn press_buttons(
-    mut commands: Commands,
-    mut markers: ResMut<PhotoMarkers>,
-    scatter: Res<Scatter>,
-    grids: big_space::prelude::Grids,
-    camera: Query<super::MarkerCamera, With<bevy_terrain::prelude::OrbitalCameraController>>,
-    mut cards: Query<&mut ImageNode>,
-    buttons: Query<(&MarkerButton, &Interaction), Changed<Interaction>>,
-) {
-    let readiness = Readiness::of(&markers, &scatter);
-
-    for (button, interaction) in &buttons {
-        if *interaction != Interaction::Pressed || !button.0.enabled(readiness) {
-            continue;
-        }
-
-        match button.0 {
-            Action::ClearPhoto => {
-                if let Some(marker) = markers.selected_mut() {
-                    let card = marker.card;
-                    photo::clear_photo(&mut marker.photo, &mut marker.missing, &mut marker.aspect);
-                    super::card::clear_card(card, &mut cards);
-                    markers.dirty = true;
-                }
-            }
-            Action::Remove => {
-                if let Some(entity) = markers.remove_selected() {
-                    commands.entity(entity).despawn();
-                }
-            }
-            Action::Tethers => {
-                markers.all_tethers = !markers.all_tethers;
-                info!(
-                    "photo markers: {}",
-                    match markers.all_tethers {
-                        true => "every tether drawn",
-                        false => "only the selected marker's tether",
-                    }
-                );
-            }
-            Action::Save => file::save_markers(&mut markers),
-            Action::Folder => scatter::choose_folder(&mut commands),
-            Action::Scatter => {
-                // Around whatever the camera is over at the moment of the press, so a scatter
-                // fills the view you are looking at rather than one you were.
-                let Some(position) = camera.single().ok().and_then(|camera| {
-                    let grid = grids.parent_grid(camera.entity)?;
-                    Some(grid.grid_position_double(camera.cell, camera.transform))
-                }) else {
-                    continue;
-                };
-
-                let (around, altitude) = scatter::over_the_camera(position);
-                scatter::scatter_markers(&mut markers, &scatter, around, altitude, &mut commands);
-            }
-        }
-    }
-}
-
 /// A preset swatch sets the sliders, and with them the selected marker's colour.
 fn press_swatches(
     mut markers: ResMut<PhotoMarkers>,
@@ -865,53 +861,39 @@ fn press_swatches(
     }
 }
 
-pub(crate) fn button_colour(interaction: Interaction, enabled: bool) -> Color {
-    match (enabled, interaction) {
-        (false, _) => DISABLED_COLOUR,
-        (true, Interaction::Pressed) => PRESSED_COLOUR,
-        (true, Interaction::Hovered) => HOVER_COLOUR,
-        (true, Interaction::None) => BUTTON_COLOUR,
-    }
-}
-
-/// Gives the buttons their hover and press states. Every frame rather than on a change of
-/// Interaction, because a button goes from able to unable without the pointer moving; the write
-/// is skipped when the colour is already right.
-fn colour_buttons(
+/// Hands a button that cannot apply to the widget as disabled, and takes it back when it can.
+///
+/// `InteractionDisabled` is what feathers reads to grey a button and what `bevy_ui_widgets`
+/// reads to stop it activating, so one component does what the painting and the dimming used to
+/// do between them. Every frame rather than on a change, because a button goes from able to
+/// unable without the pointer moving, and the insert is skipped when it is already right.
+fn enable_buttons(
+    mut commands: Commands,
     markers: Res<PhotoMarkers>,
     scatter: Res<Scatter>,
-    mut buttons: Query<(&MarkerButton, &Interaction, &mut BackgroundColor)>,
+    buttons: Query<(Entity, &MarkerButton, Has<InteractionDisabled>, &Children)>,
+    mut captions: Query<&mut Text, With<Caption>>,
 ) {
     let readiness = Readiness::of(&markers, &scatter);
 
-    for (button, interaction, mut background) in &mut buttons {
-        let colour = button_colour(*interaction, button.0.enabled(readiness));
-        background.set_if_neq(BackgroundColor(colour));
-    }
-}
+    for (entity, button, disabled, children) in &buttons {
+        match (button.0.enabled(readiness), disabled) {
+            (true, true) => {
+                commands.entity(entity).remove::<InteractionDisabled>();
+            }
+            (false, false) => {
+                commands.entity(entity).insert(InteractionDisabled);
+            }
+            _ => {}
+        }
 
-/// Greys the caption of a button that cannot apply, and whitens it again when it can.
-fn dim_buttons(
-    markers: Res<PhotoMarkers>,
-    scatter: Res<Scatter>,
-    buttons: Query<&MarkerButton>,
-    mut captions: Query<(&ChildOf, &mut TextColor, &mut Text), With<Caption>>,
-) {
-    let readiness = Readiness::of(&markers, &scatter);
-
-    for (child_of, mut colour, mut caption) in &mut captions {
-        let Ok(button) = buttons.get(child_of.parent()) else {
-            continue;
-        };
-        let text = if button.0.enabled(readiness) {
-            Color::WHITE
-        } else {
-            DISABLED_TEXT
-        };
-        colour.set_if_neq(TextColor(text));
         // Written here rather than once at spawn, because a two-state button's caption is part
         // of the state and not part of the furniture.
-        caption.set_if_neq(Text::new(button.0.caption(&markers)));
+        for child in children.iter() {
+            if let Ok(mut caption) = captions.get_mut(child) {
+                caption.set_if_neq(Text::new(button.0.caption(&markers)));
+            }
+        }
     }
 }
 
@@ -930,8 +912,8 @@ fn apply_colour(
     hex.set_if_neq(Text::new(hex_of(colour)));
 }
 
-/// Brings the sliders to the colour whenever it changes from under them: a marker selected by a
-/// click, a preset pressed, or a file loaded. SliderValue is immutable, so it is reinserted
+/// Brings the sliders to what they set whenever it changes from under them: a marker selected
+/// by a click, a preset pressed, or a file loaded. SliderValue is immutable, so it is reinserted
 /// rather than written through, which is what the widget's own observer does too.
 fn sync_sliders(
     markers: Res<PhotoMarkers>,
@@ -939,11 +921,21 @@ fn sync_sliders(
     sliders: Query<(Entity, &SliderValue, &ChildOf), With<Slider>>,
     tracks: Query<&SliderTrack>,
     children: Query<&Children>,
+    sizes: Query<(Entity, &SizeSlider, &SliderValue)>,
 ) {
     if !markers.is_changed() {
         return;
     }
     let colour = markers.colour;
+
+    // The feathers sliders say which size they are outright, so there is no track to read it
+    // from and no gradient to repaint afterwards.
+    for (entity, slider, value) in &sizes {
+        let wanted = slider.0.of(&markers);
+        if (value.0 - wanted).abs() > f32::EPSILON {
+            commands.entity(entity).insert(SliderValue(wanted));
+        }
+    }
 
     for (entity, value, _) in &sliders {
         // Which channel this slider is, from the track it holds.
@@ -1064,12 +1056,5 @@ pub(super) fn view_text(shown: usize, total: usize) -> String {
         (_, 0) => "no markers yet: Ctrl+click the ground".to_string(),
         (0, total) => format!("none of {total} shown"),
         (shown, total) => format!("{shown} of {total} shown"),
-    }
-}
-
-/// Moves each size thumb to its value. The resource is the truth, as it is for the colour.
-fn style_size_sliders(markers: Res<PhotoMarkers>, mut thumbs: Query<(&SizeThumb, &mut Node)>) {
-    for (thumb, mut node) in &mut thumbs {
-        node.left = Val::Percent(thumb.0.fraction(&markers) * 100.0);
     }
 }

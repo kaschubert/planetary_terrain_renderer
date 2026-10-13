@@ -29,10 +29,10 @@ use big_space::prelude::Grids;
 use std::collections::HashMap;
 
 use super::layout::{self, CARD_GAP, Candidate, Column, EDGE_MARGIN, Side};
-use super::panel::MarkerPanel;
 use super::tether::{SELECTED_WIDTH, TETHER_WIDTH};
 use super::{MarkerCamera, MarkerId, PhotoMarkers, photo};
 use crate::plugins::rail_editor::frame::unit_under;
+use crate::plugins::tab_panel::TabPanel;
 
 /// How big a card is drawn, measured on its long edge, in pixels, and where the panel's slider
 /// starts. The card is in screen space, so this is the size itself rather than a size in metres
@@ -65,7 +65,7 @@ pub(super) const CREAM: Color = Color::srgb(0.96, 0.94, 0.89);
 /// one arrives.
 pub(super) const EMPTY_ASPECT: f32 = 4.0 / 3.0;
 
-/// Where the cards sit in the UI stack: under everything else, so the F5 and F10 panels are
+/// Where the cards sit in the UI stack: under everything else, so the F5 and F11 panels are
 /// never covered by a photograph. A global index rather than a local one, because the cards are
 /// root nodes of their own and have no parent to be ordered within.
 const CARD_LAYER: i32 = -1;
@@ -205,7 +205,7 @@ pub(super) fn spawn_cards(mut commands: Commands, mut markers: ResMut<PhotoMarke
 ///
 /// The arranging itself is layout.rs, which is a function of its arguments and knows nothing of
 /// the world. What happens here is the gathering and the applying: which markers are even
-/// candidates, how much room the columns have once the F10 panel has taken its corner, and the
+/// candidates, how much room the columns have once the F11 panel has taken its corner, and the
 /// easing that keeps a card from jumping when its place changes.
 #[allow(clippy::too_many_arguments)]
 pub(super) fn place_cards(
@@ -218,7 +218,7 @@ pub(super) fn place_cards(
     mut order: Local<[Vec<super::MarkerId>; 2]>,
     grids: Grids,
     camera: Query<MarkerCamera, With<OrbitalCameraController>>,
-    panel: Query<(&ComputedNode, &UiGlobalTransform), With<MarkerPanel>>,
+    panel: Query<(&ComputedNode, &UiGlobalTransform), With<TabPanel>>,
     mut cards: Query<(
         Entity,
         &mut Node,
@@ -316,8 +316,9 @@ pub(super) fn place_cards(
         of_marker.push(index);
     }
 
-    // The panel's footprint, in the logical pixels everything else here is in, and only while
-    // it is actually on screen.
+    // The F11 panel's footprint, in the logical pixels everything else here is in, and only
+    // while it is actually on screen. The marker controls are a tab of that panel now, so it is
+    // that panel a card keeps clear of, wherever its tab strip happens to stand.
     //
     // Two traps in one line. ComputedNode is measured in physical pixels — inverse_scale_factor
     // is what Bevy hands over to convert back — while the viewport, the margins and the cursor
@@ -389,11 +390,16 @@ pub(super) fn place_cards(
     }
 }
 
-/// The two columns the cards stack in: inset from the edges of the viewport, and on the right
-/// stopping above the F10 panel rather than running under it.
+/// The two columns the cards stack in: inset from the edges of the viewport, and stopping above
+/// the F11 panel rather than running under it.
+///
+/// Either column yields, not just the right one. The marker controls were a panel in the bottom
+/// right until they became a tab of the F11 panel, which stands in the bottom left, and a card
+/// left under a panel is worse than a card fewer: the press that would select it is the panel's,
+/// so the panel's own buttons select photographs through it.
 pub(super) fn columns(viewport: Vec2, widest: f32, panel: Option<Rect>) -> [Column; 2] {
     let (top, bottom) = (EDGE_MARGIN, viewport.y - EDGE_MARGIN);
-    let left = Column {
+    let mut left = Column {
         side: Side::Left,
         top,
         bottom,
@@ -410,10 +416,12 @@ pub(super) fn columns(viewport: Vec2, widest: f32, panel: Option<Rect>) -> [Colu
     // overlaps is shortened, so a narrow window that puts the panel clear of the cards loses
     // nothing.
     if let Some(panel) = panel {
-        let span = column_span(&right, widest);
+        for column in [&mut left, &mut right] {
+            let span = column_span(column, widest);
 
-        if panel.max.x >= span.0 && panel.min.x <= span.1 {
-            right.bottom = right.bottom.min(panel.min.y - CARD_GAP);
+            if panel.max.x >= span.0 && panel.min.x <= span.1 {
+                column.bottom = column.bottom.min(panel.min.y - CARD_GAP);
+            }
         }
     }
 
