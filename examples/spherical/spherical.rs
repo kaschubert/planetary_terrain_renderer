@@ -1,6 +1,8 @@
 use bevy::dev_tools::fps_overlay::FpsOverlayPlugin;
+use bevy::feathers::theme::ThemedText;
 use bevy::feathers::{FeathersPlugins, dark_theme::create_dark_theme, theme::UiTheme};
-use bevy::text::FontSize;
+use bevy::ui::Overflow;
+use bevy::ui_widgets::ScrollArea;
 use bevy::window::WindowResolution;
 use bevy::{prelude::*, reflect::TypePath, render::render_resource::*, shader::ShaderRef};
 use bevy_terrain::math::{Coordinate, unit_position};
@@ -10,14 +12,14 @@ use transform_gizmo_bevy::{GizmoCamera, TransformGizmoPlugin};
 
 mod plugins;
 use plugins::auckland_rail::AucklandRailPlugin;
-use plugins::camera_pose::{CameraButtonRow, CameraPosePlugin, home_pose};
+use plugins::camera_pose::home_pose;
 use plugins::live_trains::LiveTrainsPlugin;
 use plugins::photo_markers::PhotoMarkersPlugin;
 use plugins::provenance::ProvenancePlugin;
 use plugins::rail_editor::RailEditorPlugin;
 use plugins::sheet_grid::SheetGridPlugin;
 use plugins::stations::StationsPlugin;
-use plugins::tab_panel::TabPanelPlugin;
+use plugins::tab_panel::{SubTab, SubTabBody, TabPanelPlugin};
 use plugins::track_frames::TrackFramesPlugin;
 use plugins::trains::TrainsPlugin;
 use plugins::vram_usage::VramUsagePlugin;
@@ -139,7 +141,6 @@ fn main() {
             // plugins at most, and with these there are more.
             (
                 VramUsagePlugin,    // gpu allocator usage, below the fps overlay
-                CameraPosePlugin,   // the camera's start, and the F1 list's two buttons
                 ProvenancePlugin,   // where each terrain's pixels came from, top right
                 SheetGridPlugin,    // the Topo50 sheets over the terrain, coloured by coverage
                 AucklandRailPlugin, // the rail lines over Auckland, in AT's colours
@@ -151,7 +152,7 @@ fn main() {
                 // The carriages where Auckland Transport's feed puts the trains, on F8, with
                 // the key from AT_API_KEY; tests.rs adds it without one, so it never fetches.
                 LiveTrainsPlugin::from_env(),
-                TabPanelPlugin,      // the tabbed panel of settings and readouts, on F11
+                TabPanelPlugin, // the tabbed panel of settings and readouts, on F11
             ),
             // Bevy's own widget set and theme, which the F11 panel is built from. The
             // group is TabNavigationPlugin and FeathersCorePlugin; InputDispatchPlugin,
@@ -181,8 +182,8 @@ fn main() {
         // dark theme goes in beside the plugins rather than being left to a widget to
         // notice. Dark because the F11 panel sits over the terrain with the rest.
         .insert_resource(UiTheme(create_dark_theme()))
-        .add_systems(Startup, (initialize, spawn_hotkey_list))
-        .add_systems(Update, (stream_terrains, toggle_hotkey_list))
+        .add_systems(Startup, initialize)
+        .add_systems(Update, (stream_terrains, fill_help_tab))
         .run();
 }
 
@@ -190,95 +191,148 @@ fn main() {
 /// rendered from it rather than kept as a second copy that could drift.
 const README: &str = include_str!("../../README.md");
 
-#[derive(Component)]
-struct HotkeyList;
+/// Which of the README's headings each Help page carries.
+///
+/// The section has seven and the panel has four, so the small ones travel with the big one
+/// they belong beside: the two cameras together, the lines and their editor with the trains on
+/// them, and Quality Adjustments with the toggles it is the cost of. The markers, being a tool
+/// of their own with a tab of their own, have a page of their own.
+///
+/// Named rather than taken in order, so that a heading renamed in the README shows up as a page
+/// that has lost its lines rather than as lines quietly moved to another page. The pages are
+/// `tab_panel`'s, the headings are the README's, and this is the one place the two meet.
+fn help_headings(page: SubTab) -> &'static [&'static str] {
+    match page {
+        SubTab::HelpCamera => &["Fly Camera", "Orbital Camera"],
+        SubTab::HelpVisu => &["Visualization Toggles", "Quality Adjustments"],
+        SubTab::HelpMarkers => &["Photo Markers"],
+        SubTab::HelpTrain => &["Rail Editor", "Trains"],
+        _ => &[],
+    }
+}
 
-/// The Debug Controls section of the README as plain text: its headings and bullets,
-/// without the markdown or the prose around them.
-fn hotkey_list_text() -> String {
+/// How many characters a line of the help runs to before it is broken.
+///
+/// The lines come from the README, where each bullet is one line however long it runs. A
+/// hundred characters is about what the Terrain tab's width gives this tab, and breaking them
+/// here rather than leaving it to the layout puts the break at a word and in the same place
+/// whichever tab has set the panel's width.
+const HELP_COLUMNS: usize = 100;
+
+/// A line of the help, broken at the last word that fits in [`HELP_COLUMNS`].
+///
+/// Greedy, and on whitespace only: a word longer than the whole column — a path, in practice —
+/// is left to run over rather than cut in the middle, where it could not be read back.
+fn wrapped(line: &str) -> String {
+    let mut wrapped = String::with_capacity(line.len() + line.len() / HELP_COLUMNS);
+    let mut column = 0;
+
+    for word in line.split_whitespace() {
+        let width = word.chars().count();
+
+        match column {
+            0 => {}
+            _ if column + 1 + width > HELP_COLUMNS => {
+                wrapped.push('\n');
+                column = 0;
+            }
+            _ => {
+                wrapped.push(' ');
+                column += 1;
+            }
+        }
+
+        wrapped.push_str(word);
+        column += width;
+    }
+
+    wrapped
+}
+
+/// The named headings of the README's Debug Controls section as plain text: their bullets,
+/// without the markdown or the prose around them, one string per heading and per bullet.
+///
+/// A string each rather than one with blank lines in it: a bullet that wraps to three lines
+/// wants the next bullet a few pixels below it and not a whole empty line, and a few pixels is
+/// a gap in the layout rather than anything the text itself can say.
+fn hotkey_list_text(headings: &[&str]) -> Vec<String> {
     let section = README
         .split_once("## Debug Controls")
         .map_or("", |(_, rest)| rest);
     let section = &section[..section.find("\n## ").unwrap_or(section.len())];
 
+    let mut taking = false;
+
     section
         .lines()
         .filter_map(|line| {
             if let Some(heading) = line.strip_prefix("### ") {
-                Some(format!("\n{heading}"))
-            } else if line.starts_with("- ") {
-                Some(line.replace('`', ""))
+                // A heading this page does not carry takes its bullets with it, until the
+                // next heading says otherwise.
+                taking = headings.contains(&heading);
+                taking.then(|| heading.to_string())
+            } else if taking && line.starts_with("- ") {
+                Some(wrapped(&line.replace('`', "")))
             } else {
                 None
             }
         })
-        .collect::<Vec<_>>()
-        .join("\n")
+        .collect()
 }
 
-/// The F1 list: a row of buttons, then the hotkeys themselves.
+/// Fills each page of the F11 panel's Help tab with the controls as the README writes them.
 ///
-/// A column now rather than one text node, so that the camera buttons have somewhere to sit.
-/// The row is left empty here and filled by camera_pose, which owns what goes in it. Both the
-/// row and the text inherit the list's visibility, so F1 still shows and hides the lot, and
-/// the buttons cannot be clicked while it is down: Bevy's UI picking skips what is not drawn.
-fn spawn_hotkey_list(mut commands: Commands) {
-    commands.spawn((
-        HotkeyList,
-        // Off until asked for; F1 brings it up.
-        Visibility::Hidden,
-        Node {
-            position_type: PositionType::Absolute,
-            // Below the fps overlay, whose graph puts its bottom edge around 120 px.
-            top: Val::Px(150.0),
-            left: Val::Px(6.0),
-            // Bounded so the longer lines wrap instead of running across the screen.
-            width: Val::Px(560.0),
-            padding: UiRect::all(Val::Px(6.0)),
-            flex_direction: FlexDirection::Column,
-            row_gap: Val::Px(6.0),
-            ..default()
-        },
-        BackgroundColor(Color::srgba(0.0, 0.0, 0.0, 0.5)),
-        children![
-            (
-                CameraButtonRow,
+/// The list was a panel of its own down the left, which F1 showed and hid. It is a tab now,
+/// three pages of it, and F1 asks for that tab. The camera's two buttons used to sit in a row
+/// above the text, filled in by camera_pose; the Camera tab has both of them as feathers
+/// buttons, so the row has gone rather than be drawn twice.
+///
+/// Each page still scrolls: Visu alone is twenty-nine bullets, which is taller than the window
+/// at a font a person would read. The wheel over it scrolls it, a node under the pointer being
+/// the interface's rather than the camera's.
+///
+/// The text is the README's whole Debug Controls section, seventy-odd lines and taller than the
+/// window at any font a person would read, so the body scrolls rather than running off the top:
+/// bounded to two thirds of the window's height, and the wheel over it scrolls it, a node under
+/// the pointer being the interface's rather than the camera's.
+fn fill_help_tab(mut commands: Commands, bodies: Query<(Entity, &SubTabBody), Added<SubTabBody>>) {
+    for (body, page) in &bodies {
+        let headings = help_headings(page.0);
+        if headings.is_empty() {
+            continue;
+        }
+
+        // The scroll is a child rather than the body itself: the body arrives with the
+        // `display` its page is laid out by, and an inserted `Node` would replace the lot.
+        let page = commands
+            .spawn((
+                ScrollArea,
                 Node {
-                    flex_direction: FlexDirection::Row,
-                    // Wrapping rather than overflowing, as the marker panel's rows do.
-                    flex_wrap: FlexWrap::Wrap,
-                    align_items: AlignItems::Center,
-                    column_gap: Val::Px(6.0),
+                    flex_direction: FlexDirection::Column,
+                    // What a blank line between the entries used to do, at a few pixels
+                    // rather than a whole line of them. The panel holds this tab to the
+                    // Terrain tab's width, so the longer bullets wrap to two and three, and
+                    // without any gap a page of them reads as one paragraph of unrelated
+                    // sentences.
                     row_gap: Val::Px(4.0),
+                    // No height of its own: the tab body is bounded to the room the window
+                    // has and scrolls, so this one only keeps the page's strip in place while
+                    // the lines under it move.
+                    overflow: Overflow::scroll_y(),
                     ..default()
                 },
-            ),
-            (
-                Text::new(hotkey_list_text()),
-                TextFont {
-                    font_size: FontSize::Px(13.0),
-                    ..default()
-                },
-            ),
-        ],
-    ));
-}
+                ChildOf(body),
+            ))
+            .id();
 
-fn toggle_hotkey_list(
-    input: Res<ButtonInput<KeyCode>>,
-    mut list: Query<&mut Visibility, With<HotkeyList>>,
-) {
-    if !input.just_pressed(KeyCode::F1) {
-        return;
-    }
-
-    for mut visibility in &mut list {
-        *visibility = match *visibility {
-            Visibility::Hidden => Visibility::Inherited,
-            _ => Visibility::Hidden,
-        };
+        for line in hotkey_list_text(headings) {
+            // No size of its own: the panel's root carries the one every line in it is
+            // written at, and a `ThemedText` takes it from there.
+            commands.spawn((Text::new(line), ThemedText, ChildOf(page)));
+        }
     }
 }
+
 #[allow(clippy::too_many_arguments)]
 fn initialize(
     mut commands: Commands,
