@@ -1,4 +1,10 @@
-//! The table of where each terrain's pixels came from, toggled with F2.
+//! The table of where each terrain's pixels came from: the F11 panel's Terrain tab, which F2
+//! brings forward.
+//!
+//! It was a panel of its own in the top right corner. What it holds has not changed, only
+//! where: this plugin fills the body `tab_panel` marks [`TerrainTabBody`] and leaves for it,
+//! and the sheet grid still fills the row left inside that for its height controls, so the two
+//! halves of the old panel sit together as they did.
 //!
 //! It loads its own files rather than reading the terrains', because the terrains are not
 //! there to read. They stream in by camera distance, so Wellington's config is never loaded
@@ -8,6 +14,7 @@
 
 use super::sheet_grid::SheetGridControls;
 use crate::STREAMED_TERRAINS;
+use crate::plugins::tab_panel::TerrainTabBody;
 use bevy::asset::LoadState;
 use bevy::ecs::relationship::RelatedSpawnerCommands;
 use bevy::prelude::*;
@@ -19,22 +26,18 @@ pub struct ProvenancePlugin;
 impl Plugin for ProvenancePlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<ProvenanceTable>()
-            .add_systems(Startup, (load_provenance, spawn_provenance_table))
+            .add_systems(Startup, load_provenance)
             .add_systems(
                 Update,
                 (
+                    fill_terrain_tab,
                     settle_provenance.run_if(provenance_pending),
                     rebuild_provenance_table.run_if(provenance_dirty),
-                    toggle_provenance_table,
                 )
                     .chain(),
             );
     }
 }
-
-/// The F2 panel: a row of controls, then the table.
-#[derive(Component)]
-struct ProvenancePanel;
 
 /// The table itself, rebuilt as provenance arrives.
 #[derive(Component)]
@@ -124,34 +127,30 @@ fn settle_provenance(asset_server: Res<AssetServer>, mut table: ResMut<Provenanc
     table.dirty |= settled;
 }
 
-pub(super) fn spawn_provenance_table(mut commands: Commands) {
-    commands.spawn((
-        ProvenancePanel,
-        Node {
-            position_type: PositionType::Absolute,
-            top: Val::Px(6.0),
-            // Opposite side to the hotkey list, which is long enough to run most of the
-            // way down the left.
-            right: Val::Px(6.0),
-            flex_direction: FlexDirection::Column,
-            row_gap: Val::Px(8.0),
-            padding: UiRect::all(Val::Px(6.0)),
-            ..default()
-        },
-        BackgroundColor(Color::srgba(0.0, 0.0, 0.0, 0.5)),
-        Visibility::Hidden,
-        children![
+/// Fills the Terrain tab the moment its body appears: the sheet grid's row, then the table.
+///
+/// Keyed off the body rather than ordered against the tab panel's startup system, so neither
+/// plugin has to know when the other runs. The frame, the corner and the showing and hiding are
+/// the tab panel's now; these two children are still this plugin's.
+fn fill_terrain_tab(mut commands: Commands, bodies: Query<Entity, Added<TerrainTabBody>>) {
+    for body in &bodies {
+        // Nothing is inserted on the body itself: it arrives as a column with a gap, and an
+        // inserted `Node` would replace the whole of that one — `display` with it, which is
+        // what the panel sets to lay out the tab in front and only that one.
+        commands.entity(body).with_children(|body| {
             // The sheet grid's height controls, filled in by its plugin.
-            (
+            body.spawn((
                 SheetGridControls,
                 Node {
                     flex_direction: FlexDirection::Row,
+                    flex_wrap: FlexWrap::Wrap,
                     align_items: AlignItems::Center,
                     column_gap: Val::Px(10.0),
+                    row_gap: Val::Px(4.0),
                     ..default()
                 },
-            ),
-            (
+            ));
+            body.spawn((
                 ProvenanceGrid,
                 Node {
                     display: Display::Grid,
@@ -160,9 +159,9 @@ pub(super) fn spawn_provenance_table(mut commands: Commands) {
                     row_gap: Val::Px(2.0),
                     ..default()
                 },
-            ),
-        ],
-    ));
+            ));
+        });
+    }
 }
 
 fn rebuild_provenance_table(
@@ -302,20 +301,4 @@ pub(super) fn ascii(text: &str) -> String {
 
 fn gibibytes(bytes: u64) -> String {
     format!("{:.1} GiB", bytes as f64 / (1u64 << 30) as f64)
-}
-
-fn toggle_provenance_table(
-    input: Res<ButtonInput<KeyCode>>,
-    mut panel: Query<&mut Visibility, With<ProvenancePanel>>,
-) {
-    if !input.just_pressed(KeyCode::F2) {
-        return;
-    }
-
-    for mut visibility in &mut panel {
-        *visibility = match *visibility {
-            Visibility::Hidden => Visibility::Visible,
-            _ => Visibility::Hidden,
-        };
-    }
 }

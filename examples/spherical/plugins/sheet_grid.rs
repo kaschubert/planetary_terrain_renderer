@@ -42,18 +42,14 @@ impl Plugin for SheetGridPlugin {
         app.init_resource::<SheetGrid>()
             .init_gizmo_group::<SheetGizmos>()
             .add_systems(Startup, draw_grid_over_terrain)
-            .add_systems(
-                Startup,
-                (
-                    spawn_sheet_labels,
-                    // Into the row the provenance panel leaves for it.
-                    spawn_height_controls.after(super::provenance::spawn_provenance_table),
-                ),
-            )
+            .add_systems(Startup, spawn_sheet_labels)
             .add_systems(
                 Update,
                 (
-                    toggle_sheet_grid,
+                    // Into the row the Terrain tab leaves for it, whenever that row appears:
+                    // keyed off the row rather than ordered against whoever spawns it, which
+                    // is the tab being opened rather than a startup system now.
+                    spawn_height_controls,
                     collect_sheets,
                     wheel_adjusts_height,
                     yield_wheel,
@@ -262,12 +258,6 @@ pub const IN_FRONT_OF_TERRAIN: f32 = -0.9;
 /// Cells on the far side of the planet are still dropped by the horizon test.
 fn draw_grid_over_terrain(mut store: ResMut<GizmoConfigStore>) {
     store.config_mut::<SheetGizmos>().0.depth_bias = IN_FRONT_OF_TERRAIN;
-}
-
-fn toggle_sheet_grid(input: Res<ButtonInput<KeyCode>>, mut grid: ResMut<SheetGrid>) {
-    if input.just_pressed(KeyCode::F3) {
-        grid.visible = !grid.visible;
-    }
 }
 
 /// Every sheet any provenance names, with the finest imagery that reached it.
@@ -602,7 +592,7 @@ fn draw_sheet_grid(
     }
 }
 
-/// The row in the F2 panel the height controls go into. The panel spawns it, this fills it.
+/// The row in the Terrain tab the height controls go into. Provenance spawns it, this fills it.
 #[derive(Component)]
 pub struct SheetGridControls;
 
@@ -652,15 +642,18 @@ const THUMB_SIZE: f32 = 12.0;
 
 fn spawn_height_controls(
     mut commands: Commands,
-    row: Single<Entity, With<SheetGridControls>>,
+    rows: Query<Entity, Added<SheetGridControls>>,
     grid: Res<SheetGrid>,
 ) {
+    let Some(row) = rows.iter().next() else {
+        return;
+    };
     let font = TextFont {
         font_size: FontSize::Px(12.0),
         ..default()
     };
 
-    commands.entity(*row).with_children(|row| {
+    commands.entity(row).with_children(|row| {
         spawn_checkbox(row, GridSetting::Visible, "show grid", &font);
 
         row.spawn((Text::new("sheet grid height"), font.clone()));
@@ -820,11 +813,17 @@ fn style_height_slider(
 fn sync_checkboxes(
     grid: Res<SheetGrid>,
     checkboxes: Query<(Entity, &GridCheckbox, Has<Checked>)>,
+    fresh: Query<(), Added<GridCheckbox>>,
     children: Query<&Children>,
     mut marks: Query<&mut Visibility, With<Checkmark>>,
     mut commands: Commands,
 ) {
-    if !grid.is_changed() {
+    // Also on the frame a checkbox appears, and not only when the resource changes. The boxes
+    // are spawned into the Terrain tab the first time it is opened, which is long after the
+    // resource last changed, and a box whose mark had never been settled read as off whatever
+    // the setting was — including "wheel sets height", which then had the wheel while looking
+    // as though it did not.
+    if !grid.is_changed() && fresh.is_empty() {
         return;
     }
 
