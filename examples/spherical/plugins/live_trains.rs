@@ -142,10 +142,11 @@ impl Plugin for LiveTrainsPlugin {
         app.insert_resource(LiveTrains::new(self.key.clone()))
             // After start_trains has made the stand-ins, and before the first Update spawns
             // their carriages, so with a key no stand-in is ever drawn.
+            .add_observer(on_toggle_feed)
             .add_systems(PostStartup, start_live)
             .add_systems(
                 Update,
-                (toggle_live, poll_feed, steer_trains, write_caption)
+                (poll_feed, steer_trains, write_caption)
                     .chain()
                     // After the splines are through this frame's line, as the stand-in
                     // driver is, and before it, so the table, which reads after it, reads
@@ -543,16 +544,21 @@ fn first_line(error: &str, characters: usize) -> String {
     }
 }
 
-fn toggle_live(
-    keys: Res<ButtonInput<KeyCode>>,
+/// Asks for the feed to be switched, on from off and off from on.
+///
+/// F8 and the AT trains tab's Live feed box both ask this way rather than writing the field:
+/// switching takes the rail, the trains and a `Commands` to put the carriages right, which is
+/// more than a checkbox should have to carry.
+#[derive(Event)]
+pub(crate) struct ToggleFeed;
+
+fn on_toggle_feed(
+    _: On<ToggleFeed>,
     mut commands: Commands,
     rail: Res<AucklandRail>,
     mut live: ResMut<LiveTrains>,
     mut trains: ResMut<Trains>,
 ) {
-    if !keys.just_pressed(KeyCode::F8) {
-        return;
-    }
     if live.key.is_none() {
         info!("live trains: {KEY_VARIABLE} is not set, so there is no feed to switch to");
         return;

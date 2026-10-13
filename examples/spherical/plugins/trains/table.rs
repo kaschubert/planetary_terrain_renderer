@@ -1,12 +1,19 @@
-//! The table of the trains in the bottom left corner: one row per train with where it is
-//! along its line, which way it is running and how fast, its next stop and how late it
-//! runs where the live feed has said, and a camera icon that puts the chase camera behind
-//! it.
+//! The table of the trains: one row per train with where it is along its line, which way it
+//! is running and how fast, its next stop and how late it runs where the live feed has said,
+//! and a camera icon that puts the chase camera behind it.
 //!
-//! The table is built in the style of the F2 provenance table, a grid of text cells under a
-//! row of headings with a rule beneath them, and shows exactly while the carriages do, see
-//! Trains::drawn, so F7 takes the two away together and F4, which hides the network, takes
-//! them with it. The rows are rebuilt whenever the count of trains is not the count of rows
+//! It was a panel of its own in the bottom left corner, which is where the F11 panel now
+//! stands; it is a grid on each page of that panel's AT trains tab instead, one per driver and
+//! built by [`spawn_grid`] where `trains::panel` asks for it. Only the driver that is running
+//! has rows: the other says so in a line, since a list of trains that are not the ones on
+//! screen would be worse than no list. This module asks for
+//! its tab as the carriages come into view, see Trains::drawn. It does not ask for the panel to
+//! be put away as they go: F7 and F4 take the carriages away, and so does the Stand-ins page's
+//! own box, so a panel that went with them would take that box out from under the pointer that
+//! had just unticked it. The rows stand empty instead, beside the box that brings them back.
+//!
+//! The table is built in the style of the Terrain tab's provenance table, a grid of text cells
+//! under a row of headings with a rule beneath them. The rows are rebuilt whenever the count of trains is not the count of rows
 //! or the roster has changed since they were built, see Trains::roster: once, on the first
 //! frame, and whenever the live feed adds or removes a train. The text cells are refreshed
 //! every frame the table shows, each written only when its string has changed, as the
@@ -23,6 +30,7 @@ use super::chase::ChaseCamera;
 use super::{Train, Trains};
 use crate::plugins::auckland_rail::{AucklandRail, line_colour};
 use crate::plugins::provenance::ascii;
+use crate::plugins::tab_panel::{ShowTab, Tab};
 use bevy::ecs::relationship::RelatedSpawnerCommands;
 use bevy::{color::Luminance, prelude::*, text::FontSize};
 
@@ -31,10 +39,10 @@ pub(super) struct TrainsTablePlugin;
 
 impl Plugin for TrainsTablePlugin {
     fn build(&self, app: &mut App) {
-        app.add_systems(Startup, spawn_table).add_systems(
+        app.add_systems(
             Update,
             (
-                show_table,
+                open_trains_tab,
                 build_rows.run_if(rows_stale),
                 // After the trains have moved this frame, so the distance read is where
                 // the carriage is drawn.
@@ -46,9 +54,6 @@ impl Plugin for TrainsTablePlugin {
         );
     }
 }
-
-/// The gap between the window's edge and the table, in pixels, as the other panels keep.
-const MARGIN: f32 = 6.0;
 
 /// The column headings, in order. The last is the camera icon's, which needs no word: the
 /// icon says what it is, and the README says what it does.
@@ -79,15 +84,36 @@ const LENS_FILL: Color = Color::srgba(0.0, 0.0, 0.0, 0.35);
 /// How much lighter a followed train's icon goes under the pointer, so it still answers.
 const FOLLOWED_HOVER_LIGHTER: f32 = 0.15;
 
-/// The panel, shown while the carriages are.
-#[derive(Component)]
-struct TrainsTable;
+/// Which driver's trains a grid lists.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub(super) enum Driver {
+    /// The stand-ins, one per line, which drive while the feed does not.
+    StandIns,
+    /// The trains AT's feed reports, which take over when it is switched on.
+    Live,
+}
 
-/// The grid the rows are built into, and the roster they were built for, None before the
-/// first build; see rows_stale.
+impl Driver {
+    /// Whether this is the driver that is running, which is the grid that gets rows.
+    fn driving(self, trains: &Trains) -> bool {
+        (self == Self::Live) == trains.live
+    }
+
+    /// What its grid says instead of rows while another driver has the trains.
+    fn standing_down(self) -> &'static str {
+        match self {
+            Self::StandIns => "the feed is driving: its trains are on the Live page",
+            Self::Live => "the feed is off: the stand-ins drive",
+        }
+    }
+}
+
+/// The grid the rows are built into: which driver's trains it lists, and the roster and row
+/// count it was built for, None before the first build; see rows_stale.
 #[derive(Component)]
 struct TrainsGrid {
-    roster: Option<u64>,
+    driver: Driver,
+    built: Option<(u64, usize)>,
 }
 
 /// The caption above the grid, see Trains::caption.
@@ -146,9 +172,13 @@ pub fn dir_text(direction: f64) -> &'static str {
     if direction < 0.0 { "<" } else { ">" }
 }
 
+/// Kilometres per hour in a metre per second, for the readings and the sliders that are in the
+/// unit the README quotes and the resource is not.
+pub(super) const KM_H: f64 = 3.6;
+
 /// Metres per second as whole kilometres per hour, the unit the README quotes the speed in.
 pub fn speed_text(speed: f64) -> String {
-    format!("{:.0}", speed * 3.6)
+    format!("{:.0}", speed * KM_H)
 }
 
 /// How late a train runs, from its delay in seconds: within a minute either way is on time,
@@ -197,45 +227,46 @@ fn font() -> TextFont {
     }
 }
 
-fn spawn_table(mut commands: Commands) {
+/// Fills the AT trains tab the moment its body appears: the caption, then the grid.
+///
+/// Keyed off the body rather than ordered against the tab panel's startup system, so neither
+/// plugin has to know when the other runs. Nothing is inserted on the body itself: it arrives
+/// as a column with a gap, and an inserted `Node` would replace the whole of that one,
+/// `display` with it, which is what the panel sets to lay out the tab in front and only that.
+/// The caption the driver sets, for the page that wants it under its switch.
+pub(super) fn spawn_caption(commands: &mut Commands, body: Entity) {
     commands.spawn((
-        TrainsTable,
+        TrainsCaption,
+        TextLayout::new(Justify::Left, LineBreak::NoWrap),
+        Text::default(),
+        font(),
+        TextColor(HEADING_COLOUR),
+        // Nothing to say yet; refresh_caption shows it when there is.
         Node {
-            position_type: PositionType::Absolute,
-            bottom: Val::Px(MARGIN),
-            left: Val::Px(MARGIN),
-            padding: UiRect::all(Val::Px(MARGIN)),
-            flex_direction: FlexDirection::Column,
-            row_gap: Val::Px(4.0),
+            display: Display::None,
             ..default()
         },
-        BackgroundColor(Color::srgba(0.0, 0.0, 0.0, 0.5)),
-        Visibility::Hidden,
-        children![
-            (
-                TrainsCaption,
-                TextLayout::new(Justify::Left, LineBreak::NoWrap),
-                Text::default(),
-                font(),
-                TextColor(HEADING_COLOUR),
-                // Nothing to say yet; refresh_caption shows it when there is.
-                Node {
-                    display: Display::None,
-                    ..default()
-                },
-            ),
-            (
-                TrainsGrid { roster: None },
-                Node {
-                    display: Display::Grid,
-                    grid_template_columns: RepeatedGridTrack::auto(HEADINGS.len() as u16),
-                    column_gap: Val::Px(12.0),
-                    row_gap: Val::Px(2.0),
-                    align_items: AlignItems::Center,
-                    ..default()
-                },
-            )
-        ],
+        ChildOf(body),
+    ));
+}
+
+/// One driver's grid, under whatever controls its page carries. The rows themselves are
+/// build_rows', which fills whichever grid belongs to the driver that is running.
+pub(super) fn spawn_grid(commands: &mut Commands, body: Entity, driver: Driver) {
+    commands.spawn((
+        TrainsGrid {
+            driver,
+            built: None,
+        },
+        Node {
+            display: Display::Grid,
+            grid_template_columns: RepeatedGridTrack::auto(HEADINGS.len() as u16),
+            column_gap: Val::Px(12.0),
+            row_gap: Val::Px(2.0),
+            align_items: AlignItems::Center,
+            ..default()
+        },
+        ChildOf(body),
     ));
 }
 
@@ -310,34 +341,42 @@ fn spawn_follow_button(grid: &mut RelatedSpawnerCommands<ChildOf>, train: usize)
     ));
 }
 
-/// The table is visible exactly while the carriages are, see Trains::drawn.
-fn show_table(
+/// Asks for the AT trains tab as the carriages come into view, and for nothing as they go.
+///
+/// The table was visible exactly while the carriages were, which it could be while it was a
+/// panel of its own. The F11 panel is shared and now holds the switch that hides them, so only
+/// the coming asks for anything: F11 is what puts the panel away, and the other four tabs go on
+/// working while the trains run.
+fn open_trains_tab(
     trains: Res<Trains>,
     rail: Res<AucklandRail>,
-    mut panel: Query<&mut Visibility, With<TrainsTable>>,
+    mut commands: Commands,
+    mut was_drawn: Local<bool>,
 ) {
-    let visibility = if trains.drawn(&rail) {
-        Visibility::Visible
-    } else {
-        Visibility::Hidden
-    };
-    for mut panel in &mut panel {
-        panel.set_if_neq(visibility);
+    let drawn = trains.drawn(&rail);
+    if drawn && !*was_drawn {
+        commands.trigger(ShowTab::Up(Tab::Trains));
     }
+
+    *was_drawn = drawn;
 }
 
 /// Whether the rows are for the trains there are: one icon per train, and built for this
 /// roster. A live train replaced by another in the same frame leaves the count alone but
 /// not the roster, and its row's line colour would be the old train's.
-fn rows_stale(
-    trains: Res<Trains>,
-    buttons: Query<&FollowButton>,
-    grid: Query<&TrainsGrid>,
-) -> bool {
-    trains.trains.len() != buttons.iter().len()
-        || grid
-            .single()
-            .is_ok_and(|grid| grid.roster != Some(trains.roster))
+fn rows_stale(trains: Res<Trains>, grids: Query<&TrainsGrid>) -> bool {
+    grids
+        .iter()
+        .any(|grid| grid.built != Some((trains.roster, rows_wanted(grid.driver, &trains))))
+}
+
+/// How many rows a grid should have: a row per train for the driver that is running, and none
+/// for the one standing down.
+fn rows_wanted(driver: Driver, trains: &Trains) -> usize {
+    match driver.driving(trains) {
+        true => trains.trains.len(),
+        false => 0,
+    }
 }
 
 /// Builds the headings, the rule under them and a row per train, from scratch: the rows are
@@ -346,49 +385,69 @@ fn build_rows(
     mut commands: Commands,
     trains: Res<Trains>,
     rail: Res<AucklandRail>,
-    mut grid: Query<(Entity, &mut TrainsGrid)>,
+    mut grids: Query<(Entity, &mut TrainsGrid)>,
 ) {
-    let Ok((grid, mut built)) = grid.single_mut() else {
-        return;
-    };
-    built.roster = Some(trains.roster);
-    let mut grid = commands.entity(grid);
-    grid.despawn_children();
+    for (entity, mut grid) in &mut grids {
+        let driver = grid.driver;
+        let driving = driver.driving(&trains);
+        grid.built = Some((trains.roster, rows_wanted(driver, &trains)));
 
-    grid.with_children(|grid| {
-        for heading in HEADINGS {
-            spawn_cell(grid, heading, HEADING_COLOUR);
-        }
-        // A rule under the headings, spanning every column. Grid lines are 1 indexed.
-        grid.spawn((
-            Node {
-                grid_column: GridPlacement::start_span(1, HEADINGS.len() as u16),
-                height: Val::Px(1.0),
-                ..default()
-            },
-            BackgroundColor(Color::srgb(0.4, 0.4, 0.4)),
-        ));
+        let mut grid = commands.entity(entity);
+        grid.despawn_children();
 
-        for (index, train) in trains.trains.iter().enumerate() {
-            let name = train.line_name(&rail);
-            let colour = line_colour(name);
-
-            for column in Column::ALL {
-                let text = cell_text(column, name, train);
-                let text_colour = if column == Column::Line {
-                    colour
-                } else {
-                    Color::WHITE
-                };
-                let cell = spawn_cell(grid, &text, text_colour);
-                grid.commands().entity(cell).insert(TrainCell {
-                    train: index,
-                    column,
-                });
+        grid.with_children(|grid| {
+            for heading in HEADINGS {
+                spawn_cell(grid, heading, HEADING_COLOUR);
             }
-            spawn_follow_button(grid, index);
-        }
-    });
+            // A rule under the headings, spanning every column. Grid lines are 1 indexed.
+            grid.spawn((
+                Node {
+                    grid_column: GridPlacement::start_span(1, HEADINGS.len() as u16),
+                    height: Val::Px(1.0),
+                    ..default()
+                },
+                BackgroundColor(Color::srgb(0.4, 0.4, 0.4)),
+            ));
+
+            // A line across the columns rather than rows, for a driver standing down or one
+            // that has nothing to report yet: the headings alone would read as a list of no
+            // trains, which is not what either state means.
+            let note = match (driving, trains.trains.is_empty()) {
+                (false, _) => Some(driver.standing_down()),
+                (true, true) => Some("no trains reported yet"),
+                (true, false) => None,
+            };
+
+            if let Some(note) = note {
+                let cell = spawn_cell(grid, note, IDLE_COLOUR);
+                grid.commands().entity(cell).insert(Node {
+                    grid_column: GridPlacement::start_span(1, HEADINGS.len() as u16),
+                    ..default()
+                });
+                return;
+            }
+
+            for (index, train) in trains.trains.iter().enumerate() {
+                let name = train.line_name(&rail);
+                let colour = line_colour(name);
+
+                for column in Column::ALL {
+                    let text = cell_text(column, name, train);
+                    let text_colour = if column == Column::Line {
+                        colour
+                    } else {
+                        Color::WHITE
+                    };
+                    let cell = spawn_cell(grid, &text, text_colour);
+                    grid.commands().entity(cell).insert(TrainCell {
+                        train: index,
+                        column,
+                    });
+                }
+                spawn_follow_button(grid, index);
+            }
+        });
+    }
 }
 
 /// Rewrites every text cell whose string has changed, while the table shows. A cell for a

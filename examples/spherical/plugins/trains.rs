@@ -43,6 +43,7 @@ use std::f32::consts::FRAC_PI_2;
 use table::speed_text;
 
 mod chase;
+mod panel;
 mod table;
 
 /// How fast a train runs, in metres per second: 72 km/h, a fair average for Auckland's
@@ -90,12 +91,15 @@ pub struct TrainsPlugin;
 impl Plugin for TrainsPlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<Trains>()
-            .add_plugins((table::TrainsTablePlugin, chase::ChaseCameraPlugin))
+            .add_plugins((
+                table::TrainsTablePlugin,
+                chase::ChaseCameraPlugin,
+                panel::TrainsPanelPlugin,
+            ))
             .add_systems(Startup, start_trains)
             .add_systems(
                 Update,
                 (
-                    toggle_trains,
                     spawn_carriages.run_if(carriages_missing),
                     // After the splines are through this frame's line, so a train on a line
                     // just edited drives on the line as it is.
@@ -436,13 +440,6 @@ pub fn ray_into_carriage(frame: &TrackFrame, origin: DVec3, direction: DVec3) ->
     }
 
     (enters <= leaves).then_some(enters)
-}
-
-fn toggle_trains(keys: Res<ButtonInput<KeyCode>>, mut trains: ResMut<Trains>) {
-    if keys.just_pressed(KeyCode::F7) {
-        trains.shown = !trains.shown;
-        info!("trains: {}", if trains.shown { "shown" } else { "hidden" });
-    }
 }
 
 /// One stand-in per line, see Trains::reset_stand_ins. The live feed, when there is one,
